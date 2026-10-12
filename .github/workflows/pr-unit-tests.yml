@@ -1,0 +1,111 @@
+name: PR unit tests
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), not in
+# the private source repository named by variable SOURCE_REPO. scripts/sync-release-repo.sh copies this file
+# there as .github/workflows/pr-unit-tests.yml. It lives outside .github/workflows here so the source
+# repository never schedules it.
+# For a pull request against main it runs the unit tests that reach the change, with changed-line coverage
+# enforced (npm run test:coverage -- --changed=origin/main --related; docs/unit-coverage.md), on the pull
+# request's head commit, and posts the result there as the commit status `unit-tests`. A change without
+# source or test files passes without running tests. The ut-pr-merge skill merges only on a green status.
+# Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>),
+# and every ten minutes a sweep starts it for open pull requests whose head commit has no status yet.
+#
+# Secret SOURCE_TOKEN: a fine-grained token owned by the source repository's organization, on that
+# repository, with Contents read and write (release.yml pushes tags), Commit statuses read and write and
+# Pull requests read. Run logs here are public, as release.yml's are: they show pull request numbers, commit
+# ids and test output, never pull request titles or bodies. Pull request code runs only after the token has
+# been used, with no credentials left in the checkout.
+run-name: ${{ github.event_name == 'schedule' && 'Sweep open pull requests' || format('Unit tests for pull request {0}', inputs.pr) }}
+on:
+  workflow_dispatch:
+    inputs:
+      pr: { description: 'Pull request number in the source repository', required: true, type: number }
+  schedule:
+    - cron: '*/10 * * * *'
+permissions: { contents: read }
+concurrency:
+  # a newer run for the same pull request supersedes an older one
+  group: pr-unit-tests-${{ inputs.pr || 'sweep' }}
+  cancel-in-progress: true
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+  STATUS_CONTEXT: unit-tests
+jobs:
+  sweep:
+    if: github.event_name == 'schedule' && vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    permissions: { actions: write }
+    steps:
+      - name: Start a run for each open pull request without a status
+        env: { SOURCE_TOKEN: '${{ secrets.SOURCE_TOKEN }}', GH_TOKEN: '${{ github.token }}' }
+        run: |
+          set -euo pipefail
+          prs=$(GH_TOKEN=$SOURCE_TOKEN gh pr list -R "$SOURCE_REPO" --base main --state open --limit 100 --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"')
+          while read -r pr sha; do
+            [ -n "$pr" ] || continue
+            seen=$(GH_TOKEN=$SOURCE_TOKEN gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
+            [ "$seen" = 0 ] || continue
+            # queued first, so the next sweep does not start it again
+            GH_TOKEN=$SOURCE_TOKEN gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+              -f description='Queued' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/pr-unit-tests.yml" >/dev/null
+            gh workflow run pr-unit-tests.yml -R "$GITHUB_REPOSITORY" -f pr="$pr"
+            echo "Started pull request $pr at $sha"
+          done <<< "$prs"
+
+  test:
+    if: github.event_name == 'workflow_dispatch' && vars.SOURCE_REPO != ''
+    runs-on: macos-14
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+    steps:
+      - name: Find the pull request's head and mark it pending
+        id: pr
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', PR: '${{ inputs.pr }}' }
+        run: |
+          set -euo pipefail
+          read -r sha base state < <(gh api "repos/$SOURCE_REPO/pulls/$PR" --jq '"\(.head.sha) \(.base.ref) \(.state)"')
+          [ "$state" = open ] || { echo "::error::Pull request $PR is $state."; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+            -f description='Running the unit tests that reach this change' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ steps.pr.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the whole history, so the change is measured from its merge base with the target branch
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      # Electron's download, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm ci
+        working-directory: web
+      - run: npm run test:coverage -- --changed=origin/${{ steps.pr.outputs.base }} --related
+
+  report:
+    needs: test
+    if: ${{ !cancelled() && needs.test.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the result on the pull request's head commit
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.test.outputs.sha }}
+          RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then state=success; description='The unit tests that reach this change passed with full changed-line coverage'
+          else state=failure; description='Unit tests or changed-line coverage failed'; fi
+          gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "Pull request ${{ inputs.pr }} at $SHA: $state"

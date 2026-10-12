@@ -115,6 +115,14 @@ jobs:
       # Electron ships its own Chromium, so no Playwright browser download is needed. Traces of a failure stay
       # on the runner: artifacts of this public repository are open to anyone signed in to GitHub.
       - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+      # what the page held when a test failed (Playwright's accessibility snapshot), so a failure only the
+      # runner shows can be read from the log; traces and screenshots stay on the runner
+      - if: failure()
+        run: |
+          for f in test-results/e2e/*/error-context.md; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; cat "$f"; echo "::endgroup::"
+          done
 
   mac:
     needs: plan

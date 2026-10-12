@@ -232,9 +232,11 @@ jobs:
         with: { name: 'mac-${{ matrix.arch }}', path: out }
       - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api --upload-only
 
+  # On macOS, as from a developer's Mac: electron-builder reads the NSIS uninstaller out of the installer
+  # itself there, where on Linux it would need Wine.
   windows:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     environment: release
     permissions: { contents: read, id-token: write }
     steps:
@@ -252,11 +254,16 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
       - name: Install jsign
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/jsign.deb" https://github.com/ebourg/jsign/releases/download/7.5/jsign_7.5_all.deb
-          echo "7b4a01ba81e9ee866f09a5e45d40c928707eb5286f4e20d4042c67a141ae5e62  $RUNNER_TEMP/jsign.deb" | sha256sum -c -
-          sudo apt-get install -y "$RUNNER_TEMP/jsign.deb"
+          curl -fsSL -o "$RUNNER_TEMP/jsign.jar" https://github.com/ebourg/jsign/releases/download/7.5/jsign-7.5.jar
+          echo "602a51c3545a6dc4fb99bd2ea7152b26d1345916d0c93ddfbd5936cb735af91c  $RUNNER_TEMP/jsign.jar" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\nexec java -jar "%s" "$@"\n' "$RUNNER_TEMP/jsign.jar" > "$RUNNER_TEMP/bin/jsign"
+          chmod +x "$RUNNER_TEMP/bin/jsign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: npm run package:win:dir
       # OIDC, so no stored secret; right before signing, since GitHub's ID token is short-lived.
       # scripts/sign-win.sh asks this login for a code-signing token per file.

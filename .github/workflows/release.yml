@@ -6,10 +6,11 @@ name: Release
 # SOURCE_TOKEN (Contents read and write on it) checks the commit out and pushes the release tag here.
 # scripts/sync-release-repo.sh copies this file there; a run refuses a copy that differs from this file at
 # the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
-# Builds that commit of main for macOS arm64 and x64 and Windows x64 after the release test suites pass:
-# macOS is signed, notarized and stapled (app and DMG), Windows is Authenticode-signed with Azure Artifact
-# Signing and checked on Windows. Every build is uploaded to the server and registered as a draft; once all
-# three are, the commit is tagged v<version> and, when publish_pct is given, the release is published.
+# Builds that commit of main for macOS arm64 and x64 and Windows x64 while the release suites run (unit and
+# web on one runner, end-to-end over four): macOS is signed, notarized and stapled (app and DMG), Windows is
+# Authenticode-signed with Azure Artifact Signing and checked on Windows. Only once every suite has passed is
+# anything uploaded and registered as a draft; once all three are, the commit is tagged v<version> and, when
+# publish_pct is given, the release is published.
 # A failed job can be re-run on its own (Re-run failed jobs): uploads and registration are idempotent.
 #
 # Secrets (on the release repository): SOURCE_TOKEN, MOPILOT_DEVELOPER_ID_P12(+_PASSWORD), MOPILOT_SIGN_IDENTITY,
@@ -65,8 +66,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: release-notes, path: docs/release-notes.md, retention-days: 1 }
 
-  # The release-only suites (AGENTS.md): typecheck, unit, web and end-to-end, once, before anything is signed.
-  check:
+  # The release-only suites (AGENTS.md), on the commit being built: typecheck, unit and web tests on one
+  # runner, the end-to-end suite split over four. They run while the builds do; nothing is uploaded until
+  # they pass.
+  unit:
     needs: plan
     runs-on: macos-14
     steps:
@@ -74,17 +77,47 @@ jobs:
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
+      # Electron's download (and electron-builder's NSIS kit), kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm ci && npm run typecheck && npm test
         working-directory: web
+
+  e2e:
+    needs: plan
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # Electron's download (and electron-builder's NSIS kit), kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
       # Electron ships its own Chromium, so no Playwright browser download is needed. Traces of a failure stay
       # on the runner: artifacts of this public repository are open to anyone signed in to GitHub.
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
 
   mac:
-    needs: check
+    needs: plan
     runs-on: macos-14
     strategy:
       matrix:
@@ -93,7 +126,6 @@ jobs:
       MOPILOT_SIGN_IDENTITY: ${{ secrets.MOPILOT_SIGN_IDENTITY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -120,6 +152,14 @@ jobs:
         run: |
           echo "$KEY" > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      # Electron's download (and electron-builder's NSIS kit), kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
       # package.mjs builds the computer-use helper and sage-mcp (swift) for the arch into Contents/Helpers,
@@ -155,11 +195,41 @@ jobs:
           REQ=$(/usr/libexec/PlistBuddy -c 'Print :MPCPeerRequirement' "$HELPER/Contents/Info.plist")
           codesign --verify -R="$REQ" "$APP"
           find "$UNPACKED" -type f -print0 | xargs -0 -n1 sh -c 'codesign --verify --strict -vv "$0" && codesign -dv "$0" 2>&1 | grep -q "flags=.*runtime" || { echo "not signed with hardened runtime: $0"; exit 255; }'
-      # zip and DMG; the DMG is signed, notarized, stapled and assessed; both are uploaded and registered
-      - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api
+      # zip and DMG; the DMG is signed, notarized, stapled and assessed. Uploading waits for the tests (mac-release).
+      - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --build-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            out/MoPilot-Code-*-${{ matrix.arch }}.zip
+            out/MoPilot-Code-*-${{ matrix.arch }}.dmg
+
+  # Once every suite has passed: upload the macOS artifacts and register them as drafts.
+  mac-release:
+    needs: [mac, unit, e2e]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [arm64, x64]
+    env:
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - uses: actions/download-artifact@v4
+        with: { name: release-notes, path: docs }
+      - uses: actions/download-artifact@v4
+        with: { name: 'mac-${{ matrix.arch }}', path: out }
+      - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api --upload-only
 
   windows:
-    needs: check
+    needs: plan
     runs-on: ubuntu-latest
     environment: release
     permissions: { contents: read, id-token: write }
@@ -168,6 +238,14 @@ jobs:
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
+      # Electron's download (and electron-builder's NSIS kit), kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
       - name: Install jsign
@@ -216,7 +294,7 @@ jobs:
           }
 
   windows-release:
-    needs: windows-verify
+    needs: [windows-verify, unit, e2e]
     runs-on: ubuntu-latest
     env:
       RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
@@ -234,7 +312,7 @@ jobs:
 
   # Only when every platform is registered: tag the commit, then publish if asked.
   finish:
-    needs: [mac, windows-release]
+    needs: [mac-release, windows-release]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     env:

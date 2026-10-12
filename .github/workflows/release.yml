@@ -1,0 +1,250 @@
+name: Release
+# Started from Admin → Releases → "Release main" (web/lib/releaseRun.ts), or by hand:
+#   gh workflow run release.yml -R mopilot-ai/mopilot-code-release -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
+# It runs in a private release repository (mopilot-ai/mopilot-code-release, whose Actions billing works) that
+# holds only this file and the signing secrets: variable SOURCE_REPO names this repository, and secret
+# SOURCE_TOKEN (Contents read and write on it) checks the commit out and pushes the release tag here.
+# scripts/sync-release-repo.sh copies this file there; a run refuses a copy that differs from this file at
+# the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
+# Builds that commit of main for macOS arm64 and x64 and Windows x64 after the release test suites pass:
+# macOS is signed, notarized and stapled (app and DMG), Windows is Authenticode-signed with Azure Artifact
+# Signing and checked on Windows. Every build is uploaded to the server and registered as a draft; once all
+# three are, the commit is tagged v<version> and, when publish_pct is given, the release is published.
+# A failed job can be re-run on its own (Re-run failed jobs): uploads and registration are idempotent.
+#
+# Secrets (on the release repository): SOURCE_TOKEN, MOPILOT_DEVELOPER_ID_P12(+_PASSWORD), MOPILOT_SIGN_IDENTITY,
+# APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER, RELEASE_PUBLISH_TOKEN, and on the `release` environment AZURE_SIGN_CLIENT_ID (an app
+# registration in the signing tenant with "Artifact Signing Certificate Profile Signer" on mopilot-signing
+# and a federated credential for the `release` environment; GitHub's subject for it carries the owner and
+# repository IDs: repo:<owner>@<owner id>/<repository>@<repository id>:environment:release). Variable
+# MOPILOT_API (default https://mopilot.ai).
+#
+# The release repository is public (Actions minutes are free there), so runs keep what anyone can see small:
+# no personal data in run names or inputs, no test traces, and artifacts that live one day. Run logs (test
+# names, build output) are public; secrets are masked, and only collaborators can dispatch a run.
+run-name: Release ${{ inputs.version }} (${{ inputs.channel }})
+on:
+  workflow_dispatch:
+    inputs:
+      version: { description: 'Version, e.g. 0.4.0, 0.4.0-beta.1 or 0.4.0-dogfood.1', required: true, type: string }
+      channel: { description: 'Update channel (must match the version)', required: true, type: choice, options: [dogfood, beta, stable] }
+      sha: { description: 'Full SHA of the main commit to build', required: true, type: string }
+      publish_pct: { description: 'Publish at this rollout % once every build is registered (empty: leave drafts)', required: false, type: string, default: '' }
+      notes: { description: "What's new, Markdown (empty: docs/RELEASE-NOTES-DRAFT.md)", required: false, type: string, default: '' }
+concurrency: { group: release, cancel-in-progress: false }
+permissions: { contents: read }
+env:
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+  RELEASE_SHA: ${{ inputs.sha }}
+  RELEASE_PUBLISH_PCT: ${{ inputs.publish_pct }}
+  MOPILOT_API: ${{ vars.MOPILOT_API }}
+  BUILD_NUMBER: ${{ github.run_number }}
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      # In the release repo, this file must be the source's own at that commit (see the top of this file).
+      - if: vars.SOURCE_REPO != ''
+        uses: actions/checkout@v4
+        with: { path: .release-repo, sparse-checkout: .github/workflows/release.yml, sparse-checkout-cone-mode: false }
+      - if: vars.SOURCE_REPO != ''
+        run: |
+          cmp .release-repo/.github/workflows/release.yml .github/workflows/release.yml || {
+            echo "::error::This repository's release.yml differs from $SOURCE_REPO's at $RELEASE_SHA. Copy it over: scripts/sync-release-repo.sh"
+            exit 1
+          }
+          rm -rf .release-repo
+        env: { SOURCE_REPO: '${{ vars.SOURCE_REPO }}' }
+      - run: node scripts/releasePlan.mjs
+        env: { RELEASE_NOTES: '${{ inputs.notes }}' }
+      - uses: actions/upload-artifact@v4
+        with: { name: release-notes, path: docs/release-notes.md, retention-days: 1 }
+
+  # The release-only suites (AGENTS.md): typecheck, unit, web and end-to-end, once, before anything is signed.
+  check:
+    needs: plan
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm ci && npm run typecheck && npm test
+        working-directory: web
+      # Electron ships its own Chromium, so no Playwright browser download is needed. Traces of a failure stay
+      # on the runner: artifacts of this public repository are open to anyone signed in to GitHub.
+      - run: npm run test:e2e
+
+  mac:
+    needs: check
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [arm64, x64]
+    env:
+      MOPILOT_SIGN_IDENTITY: ${{ secrets.MOPILOT_SIGN_IDENTITY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/download-artifact@v4
+        with: { name: release-notes, path: docs }
+      - name: Import Developer ID certificate
+        env:
+          P12: ${{ secrets.MOPILOT_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.MOPILOT_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+      - name: Write notary API key
+        env:
+          KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          echo "$KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - run: npm ci
+      # package.mjs builds the computer-use helper and sage-mcp (swift) for the arch into Contents/Helpers,
+      # signs inside-out and notarizes and staples the app
+      - run: npx vite build && node scripts/package.mjs --arch ${{ matrix.arch }}
+      - name: Verify signature
+        run: |
+          APP="out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
+          codesign --verify --deep --strict -vv "$APP"
+          spctl -a -vvv -t exec "$APP"
+          xcrun stapler validate "$APP"
+          # --deep only follows nested bundles; check the Mach-Os in app.asar.unpacked (node-pty) one by one, and
+          # ripgrep, which ships in Contents/Resources/ripgrep (scripts/fetch-vendor.mjs)
+          UNPACKED="$APP/Contents/Resources/app.asar.unpacked"
+          test -x "$UNPACKED/node_modules/node-pty/prebuilds/darwin-${{ matrix.arch }}/spawn-helper"
+          RG="$APP/Contents/Resources/ripgrep/rg"
+          test -x "$RG"
+          codesign --verify --strict -vv "$RG"
+          codesign -dv "$RG" 2>&1 | grep -q "flags=.*runtime" || { echo "no hardened runtime: $RG"; exit 1; }
+          # the helper and sage-mcp: present, signed by the same team with the hardened runtime, and the helper
+          # names the main app as its only caller
+          HELPER="$APP/Contents/Helpers/MoPilot Code Computer Use.app"
+          SAGE_MCP="$APP/Contents/Helpers/sage-mcp"
+          AUTH_COMMAND="$APP/Contents/Helpers/auth-command"
+          TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+          DISCLAIM="$APP/Contents/Helpers/disclaim"
+          for CODE in "$HELPER" "$SAGE_MCP" "$AUTH_COMMAND" "$DISCLAIM"; do
+            codesign --verify --strict -vv "$CODE"
+            codesign -dv "$CODE" 2>&1 | grep -q "flags=.*runtime" || { echo "no hardened runtime: $CODE"; exit 1; }
+            test "$(codesign -dv "$CODE" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$TEAM" || { echo "not signed by $TEAM: $CODE"; exit 1; }
+          done
+          spctl -a -vvv -t exec "$HELPER"
+          REQ=$(/usr/libexec/PlistBuddy -c 'Print :MPCPeerRequirement' "$HELPER/Contents/Info.plist")
+          codesign --verify -R="$REQ" "$APP"
+          find "$UNPACKED" -type f -print0 | xargs -0 -n1 sh -c 'codesign --verify --strict -vv "$0" && codesign -dv "$0" 2>&1 | grep -q "flags=.*runtime" || { echo "not signed with hardened runtime: $0"; exit 255; }'
+      # zip and DMG; the DMG is signed, notarized, stapled and assessed; both are uploaded and registered
+      - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api
+
+  windows:
+    needs: check
+    runs-on: ubuntu-latest
+    environment: release
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - run: npm ci
+      - name: Install jsign
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/jsign.deb" https://github.com/ebourg/jsign/releases/download/7.5/jsign_7.5_all.deb
+          echo "7b4a01ba81e9ee866f09a5e45d40c928707eb5286f4e20d4042c67a141ae5e62  $RUNNER_TEMP/jsign.deb" | sha256sum -c -
+          sudo apt-get install -y "$RUNNER_TEMP/jsign.deb"
+      - run: npm run package:win:dir
+      # OIDC, so no stored secret; right before signing, since GitHub's ID token is short-lived.
+      # scripts/sign-win.sh asks this login for a code-signing token per file.
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_SIGN_CLIENT_ID }}
+          tenant-id: db32a175-c842-4e74-9217-47fa7d5ae766
+          allow-no-subscriptions: true
+      # signs MoPilot Code.exe, builds the NSIS installer, signs the installer
+      - run: node scripts/package-win.mjs --arch x64
+        env: { MOPILOT_WIN_SIGN: scripts/sign-win.sh }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            out/MoPilot-Code-Setup-*-x64.exe
+            out/MoPilot Code-win32-x64/MoPilot Code.exe
+
+  # Windows itself checks both signatures: valid, MoPilot LLC's certificate, and timestamped (so they
+  # outlive the short-lived signing certificate).
+  windows-verify:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: windows, path: win }
+      - shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -File win -Filter *.exe
+          if ($files.Count -ne 2) { throw "expected the app and the installer, found $($files.Count) files" }
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            "$($f.Name): $($s.Status) $($s.SignerCertificate.Subject)"
+            if ($s.Status -ne 'Valid') { throw "$($f.Name): signature $($s.Status) $($s.StatusMessage)" }
+            if ($s.SignerCertificate.Subject -notmatch 'O=MoPilot LLC') { throw "$($f.Name): signed by $($s.SignerCertificate.Subject)" }
+            if (-not $s.TimeStamperCertificate) { throw "$($f.Name): no timestamp" }
+          }
+
+  windows-release:
+    needs: windows-verify
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - uses: actions/download-artifact@v4
+        with: { name: release-notes, path: docs }
+      - uses: actions/download-artifact@v4
+        with: { name: windows, path: out }
+      - run: node scripts/release.mjs --platform win32 --arch x64 --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api
+
+  # Only when every platform is registered: tag the commit, then publish if asked.
+  finish:
+    needs: [mac, windows-release]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    env:
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: git tag "v$RELEASE_VERSION" "$RELEASE_SHA" && git push origin "v$RELEASE_VERSION"
+      - if: inputs.publish_pct != ''
+        run: node scripts/release-admin.mjs publish "$RELEASE_VERSION" --pct "$RELEASE_PUBLISH_PCT" --channel "$RELEASE_CHANNEL"
+      - run: node scripts/release-admin.mjs list "$RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"

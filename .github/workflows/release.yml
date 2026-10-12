@@ -2,8 +2,9 @@ name: Release
 # Started from Admin → Releases → "Release main" (web/lib/releaseRun.ts), or by hand:
 #   gh workflow run release.yml -R mopilot-ai/mopilot-code-release -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
 # It runs in a private release repository (mopilot-ai/mopilot-code-release, whose Actions billing works) that
-# holds only this file and the signing secrets: variable SOURCE_REPO names this repository, and secret
-# SOURCE_TOKEN (Contents read and write on it) checks the commit out and pushes the release tag here.
+# holds only this file, pr-unit-tests.yml and the signing secrets: variable SOURCE_REPO names this repository, and secret
+# SOURCE_TOKEN (Contents read and write on it; pr-unit-tests.yml also needs Commit statuses read and write and Pull
+# requests read) checks the commit out and pushes the release tag here.
 # scripts/sync-release-repo.sh copies this file there; a run refuses a copy that differs from this file at
 # the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
 # Builds that commit of main for macOS arm64 and x64 and Windows x64 while the release suites run (unit and

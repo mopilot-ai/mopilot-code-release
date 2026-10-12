@@ -120,6 +120,8 @@ jobs:
     needs: plan
     runs-on: macos-14
     strategy:
+      # one architecture failing doesn't hide the other's result
+      fail-fast: false
       matrix:
         arch: [arm64, x64]
     env:
@@ -212,6 +214,8 @@ jobs:
     needs: [mac, unit, e2e]
     runs-on: ubuntu-latest
     strategy:
+      # one architecture failing doesn't hide the other's result
+      fail-fast: false
       matrix:
         arch: [arm64, x64]
     env:

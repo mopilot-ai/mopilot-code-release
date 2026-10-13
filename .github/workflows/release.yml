@@ -9,9 +9,11 @@ name: Release
 # the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
 # Builds that commit of main for macOS arm64 and x64 and Windows x64 while the release suites run (unit and
 # web on one runner, end-to-end over four): macOS is signed, notarized and stapled (app and DMG), Windows is
-# Authenticode-signed with Azure Artifact Signing and checked on Windows. Only once every suite has passed is
-# anything uploaded and registered as a draft; once all three are, the commit is tagged v<version> and, when
-# publish_pct is given, the release is published.
+# Authenticode-signed with Azure Artifact Signing and checked on Windows. A suite that main-unit-tests.yml or
+# main-e2e.yml already passed on that commit is not run again (scripts/releasePlan.mjs): the account runs five
+# macOS jobs at a time, so the three builds then start at once instead of waiting for a test shard's runner.
+# Only once every suite has passed is anything uploaded and registered as a draft; once all three are, the commit
+# is tagged v<version> and, when publish_pct is given, the release is published.
 # A failed job can be re-run on its own (Re-run failed jobs): uploads and registration are idempotent.
 #
 # Secrets (on the release repository): SOURCE_TOKEN, MOPILOT_DEVELOPER_ID_P12(+_PASSWORD), MOPILOT_SIGN_IDENTITY,
@@ -45,6 +47,9 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    outputs:
+      unit: ${{ steps.plan.outputs.unit }}
+      e2e: ${{ steps.plan.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}', fetch-depth: 0 }
@@ -62,16 +67,20 @@ jobs:
           }
           rm -rf .release-repo
         env: { SOURCE_REPO: '${{ vars.SOURCE_REPO }}' }
-      - run: node scripts/releasePlan.mjs
-        env: { RELEASE_NOTES: '${{ inputs.notes }}' }
+      # also reads main's results on the commit (main-unit-tests, main-e2e) to skip the suites already passed there
+      - id: plan
+        run: node scripts/releasePlan.mjs
+        env: { RELEASE_NOTES: '${{ inputs.notes }}', SOURCE_REPO: '${{ vars.SOURCE_REPO }}', GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}' }
       - uses: actions/upload-artifact@v4
         with: { name: release-notes, path: docs/release-notes.md, retention-days: 1 }
 
   # The release-only suites (AGENTS.md), on the commit being built: typecheck, unit and web tests on one
   # runner, the end-to-end suite split over four. They run while the builds do; nothing is uploaded until
-  # they pass.
+  # they pass. Each is skipped when main's run of it (.github/release-repo/main-unit-tests.yml, main-e2e.yml) has
+  # already passed on this commit; tests/releaseSuitesMatch.test.ts keeps those runs the same as these jobs.
   unit:
     needs: plan
+    if: needs.plan.outputs.unit == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +105,7 @@ jobs:
 
   e2e:
     needs: plan
+    if: needs.plan.outputs.e2e == 'true'
     runs-on: macos-14
     strategy:
       fail-fast: false
@@ -222,9 +232,12 @@ jobs:
             out/MoPilot-Code-*-${{ matrix.arch }}.zip
             out/MoPilot-Code-*-${{ matrix.arch }}.dmg
 
-  # Once every suite has passed: upload the macOS artifacts and register them as drafts.
+  # Once every suite has passed: upload the macOS artifacts and register them as drafts. A suite skipped because
+  # main already passed it doesn't hold this up, but a failed or cancelled one does (a skip otherwise skips
+  # every job after it, so this and each later job says so).
   mac-release:
     needs: [mac, unit, e2e]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     strategy:
       # one architecture failing doesn't hide the other's result
@@ -319,6 +332,7 @@ jobs:
 
   windows-release:
     needs: [windows-verify, unit, e2e]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     env:
       RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
@@ -337,6 +351,7 @@ jobs:
   # Only when every platform is registered: tag the commit, then publish if asked.
   finish:
     needs: [mac-release, windows-release]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions: { contents: write }
     env:

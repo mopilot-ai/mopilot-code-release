@@ -1,0 +1,132 @@
+name: Main E2E
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# main-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
+# .github/workflows/main-e2e.yml.
+# Every hour it takes main's newest commit and, unless that commit already has the commit status `main-e2e`, runs the
+# release's end-to-end suite on it (the e2e job of release.yml, split over four runners) and posts the result there.
+# A spec that a merged change left stale then shows within the hour, not at the next release; the merges since the
+# last green `main-e2e` commit are the ones to look at. scripts/merge-gate.mjs reports the newest result to whoever
+# merges next. The suite may run here because a GitHub Actions runner is nobody's desktop (scripts/release-suites.cjs).
+# Started by hand for one commit: gh workflow run main-e2e.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>
+#
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read, Commit statuses read and write), plus Issues
+# read and write for the main-red issue. Run logs
+# here are public, as release.yml's are: no test traces are uploaded, and a failure's page snapshot goes to the log.
+run-name: ${{ inputs.sha && format('E2E for main at {0}', inputs.sha) || 'E2E for main' }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
+  schedule:
+    - cron: '20 * * * *'
+permissions: { contents: read }
+concurrency:
+  # one run at a time; a newer scheduled run waits instead of cancelling one already testing
+  group: main-e2e
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+  STATUS_CONTEXT: main-e2e
+
+jobs:
+  pick:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      - name: Pick main's commit and mark it pending
+        id: pick
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
+        run: |
+          set -euo pipefail
+          sha=${SHA:-$(gh api "repos/$SOURCE_REPO/git/ref/heads/main" --jq .object.sha)}
+          seen=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
+          # a scheduled run leaves a tested (or testing) commit alone; a run started by hand tests it again (a flake)
+          if [ "$seen" != 0 ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then echo "main at $sha already has $STATUS_CONTEXT"; exit 0; fi
+          gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+            -f description='Running the end-to-end suite' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    needs: pick
+    if: needs.pick.outputs.sha != ''
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # Electron's download, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      # Electron downloads its binary on first use; a network blip there would fail the shard's first test
+      - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+      # what the page held when a test failed, so a failure only the runner shows can be read from the log
+      - if: failure()
+        run: |
+          for f in test-results/e2e/*/error-context.md; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; cat "$f"; echo "::endgroup::"
+          done
+
+  report:
+    needs: [pick, e2e]
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    # actions: read for the failed jobs' logs, which name the failing tests
+    permissions: { contents: read, actions: read }
+    steps:
+      - name: Post the result on main's commit
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          RESULT: ${{ needs.e2e.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then state=success; description='The end-to-end suite passed'
+          else state=failure; description='The end-to-end suite failed; see the failing shards'; fi
+          gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "main at $SHA: $state"
+      # one open issue per red run on main (label main-red), closed when it passes (scripts/main-red-issue.mjs); needs
+      # SOURCE_TOKEN to have Issues read and write. A failure here leaves the status above in place.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Open, update or close the main-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          RESULT: ${{ needs.e2e.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
+          : > "$RUNNER_TEMP/failed.log"
+          if [ "$state" = failure ]; then
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> "$RUNNER_TEMP/failed.log" || true
+            done
+          fi
+          GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-e2e "$SHA" "$state" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/failed.log"

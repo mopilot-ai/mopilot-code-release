@@ -1,0 +1,40 @@
+name: Sweep
+# Runs in the public release repository (mopilot-ai/mopilot-code-release), like pr-unit-tests.yml beside it;
+# scripts/sync-release-repo.sh copies this file there as .github/workflows/sweep.yml.
+# Whenever a pull request check or a run on main finishes, it runs scripts/ci-sweep.mjs from a checkout of main: it
+# starts the unit-tests check for open pull requests whose head has none, merges pull requests labeled
+# `merge-on-green` that the merge gate allows, and starts main-unit-tests (at most every ten minutes) and main-e2e (at
+# most hourly) on an untested main. GitHub's schedule events are best effort and were rarely fired here, so finishing
+# runs drive it; the schedule below is only a backup, and starting it by hand runs one sweep.
+#
+# Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
+# Pull requests read). github.token starts the other workflows here.
+run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}
+on:
+  workflow_run:
+    workflows: ['PR unit tests', 'Main unit tests', 'Main E2E']
+    types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+permissions: { contents: read, actions: write }
+concurrency:
+  # one sweep at a time; finishing runs that pile up while it works share the one waiting after it
+  group: sweep
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+
+jobs:
+  sweep:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      # main's code, never a pull request's, with the token the merge gate's fetch needs
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Start missing checks, merge on green, start the runs on main when due
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
+        run: node scripts/ci-sweep.mjs

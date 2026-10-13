@@ -10,64 +10,32 @@ name: PR unit tests
 # (npm run test:coverage -- --changed=<main> --related; docs/unit-coverage.md), on the pull request's head commit
 # merged with main as it is when the run starts, and posts the result on the head commit as the commit status
 # `unit-tests`, naming that main commit ("merged with main <sha>"). A change without source or test files passes
-# without running tests. Merges go through the merge gate (scripts/merge-gate.mjs): after a green check, and on each
-# sweep, scripts/merge-on-green.mjs merges a pull request labeled `merge-on-green` when the gate allows it, so an
-# agent asked to merge does not have to poll.
-# Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>),
-# and every ten minutes a sweep starts it for open pull requests whose head commit has no status yet.
+# without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
+# Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
+# finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
+# labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
 #
 # Secret SOURCE_TOKEN: a fine-grained token owned by the source repository's organization, on that
 # repository, with Contents read and write (release.yml pushes tags), Commit statuses read and write and
 # Pull requests read. Run logs here are public, as release.yml's are: they show pull request numbers, commit
 # ids and test output, never pull request titles or bodies. Pull request code runs only after the token has
 # been used, with no credentials left in the checkout.
-run-name: ${{ github.event_name == 'schedule' && 'Sweep open pull requests' || format('Unit tests for pull request {0}', inputs.pr) }}
+run-name: ${{ format('Unit tests for pull request {0}', inputs.pr) }}
 on:
   workflow_dispatch:
     inputs:
       pr: { description: 'Pull request number in the source repository', required: true, type: number }
-  schedule:
-    - cron: '*/10 * * * *'
 permissions: { contents: read }
 concurrency:
   # a newer run for the same pull request supersedes an older one
-  group: pr-unit-tests-${{ inputs.pr || 'sweep' }}
+  group: pr-unit-tests-${{ inputs.pr }}
   cancel-in-progress: true
 env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
   STATUS_CONTEXT: unit-tests
 jobs:
-  sweep:
-    if: github.event_name == 'schedule' && vars.SOURCE_REPO != ''
-    runs-on: ubuntu-latest
-    permissions: { actions: write }
-    steps:
-      - name: Start a run for each open pull request without a status
-        env: { SOURCE_TOKEN: '${{ secrets.SOURCE_TOKEN }}', GH_TOKEN: '${{ github.token }}' }
-        run: |
-          set -euo pipefail
-          prs=$(GH_TOKEN=$SOURCE_TOKEN gh pr list -R "$SOURCE_REPO" --base main --state open --limit 100 --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"')
-          while read -r pr sha; do
-            [ -n "$pr" ] || continue
-            seen=$(GH_TOKEN=$SOURCE_TOKEN gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
-            [ "$seen" = 0 ] || continue
-            # queued first, so the next sweep does not start it again
-            GH_TOKEN=$SOURCE_TOKEN gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
-              -f description='Queued' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/pr-unit-tests.yml" >/dev/null
-            gh workflow run pr-unit-tests.yml -R "$GITHUB_REPOSITORY" -f pr="$pr"
-            echo "Started pull request $pr at $sha"
-          done <<< "$prs"
-      # labeled pull requests the gate now allows: labeled after a green check, held while main was red, or main moved
-      - uses: actions/checkout@v4
-        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', fetch-depth: 0 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
-      - name: Merge pull requests labeled merge-on-green that the merge gate allows
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
-        run: if [ -f scripts/merge-on-green.mjs ]; then node scripts/merge-on-green.mjs; fi
-
   test:
-    if: github.event_name == 'workflow_dispatch' && vars.SOURCE_REPO != ''
+    if: vars.SOURCE_REPO != ''
     runs-on: macos-14
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
@@ -127,7 +95,6 @@ jobs:
 
   report:
     needs: test
-    permissions: { actions: write }
     if: ${{ !cancelled() && needs.test.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:
@@ -145,18 +112,3 @@ jobs:
           gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"
-      # merge-on-green, decided by the merge gate from a checkout of main: the pull request's own code never runs here
-      - if: needs.test.result == 'success'
-        uses: actions/checkout@v4
-        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', fetch-depth: 0 }
-      - if: needs.test.result == 'success'
-        uses: actions/setup-node@v4
-        with: { node-version: 24 }
-      - name: Merge it if it is labeled merge-on-green and the merge gate allows it
-        if: needs.test.result == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
-          RELEASE_GH_TOKEN: ${{ github.token }}
-          RELEASE_REPO: ${{ github.repository }}
-          PR: ${{ inputs.pr }}
-        run: if [ -f scripts/merge-on-green.mjs ]; then node scripts/merge-on-green.mjs "$PR"; fi

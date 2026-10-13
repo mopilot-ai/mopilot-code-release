@@ -1,0 +1,121 @@
+name: Main unit tests
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# pr-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
+# .github/workflows/main-unit-tests.yml.
+# Every ten minutes it takes main's newest commit and, unless that commit already has the commit status
+# `main-unit-tests`, runs the release's unit job on it (typecheck, unit and web tests: the unit job of release.yml)
+# and posts the result there. Commits that landed together are covered by the newest one. It catches what each pull
+# request's related tests cannot: two changes that pass alone and fail together, a test no import leads to, a
+# whole-repository invariant. scripts/merge-gate.mjs reports the newest result to whoever merges next.
+# Started by hand for one commit: gh workflow run main-unit-tests.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>
+#
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read, Commit statuses read and write), plus Issues
+# read and write for the main-red issue.
+run-name: ${{ inputs.sha && format('Unit tests for main at {0}', inputs.sha) || 'Unit tests for main' }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
+  schedule:
+    - cron: '5-59/10 * * * *'
+permissions: { contents: read }
+concurrency:
+  # one run at a time; a newer scheduled run waits instead of cancelling one already testing
+  group: main-unit-tests
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+  STATUS_CONTEXT: main-unit-tests
+
+jobs:
+  pick:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      - name: Pick main's commit and mark it pending
+        id: pick
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
+        run: |
+          set -euo pipefail
+          sha=${SHA:-$(gh api "repos/$SOURCE_REPO/git/ref/heads/main" --jq .object.sha)}
+          seen=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
+          # a scheduled run leaves a tested (or testing) commit alone; a run started by hand tests it again (a flake)
+          if [ "$seen" != 0 ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then echo "main at $sha already has $STATUS_CONTEXT"; exit 0; fi
+          gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+            -f description='Running the full unit suite' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: pick
+    if: needs.pick.outputs.sha != ''
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      # Electron's download, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm ci && npm run typecheck && npm test
+        working-directory: web
+
+  report:
+    needs: [pick, test]
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    # actions: read for the failed jobs' logs, which name the failing tests
+    permissions: { contents: read, actions: read }
+    steps:
+      - name: Post the result on main's commit
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then state=success; description='Typecheck, the full unit suite and the web tests passed'
+          else state=failure; description='Typecheck, the full unit suite or the web tests failed'; fi
+          gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "main at $SHA: $state"
+      # one open issue per red run on main (label main-red), closed when it passes (scripts/main-red-issue.mjs); needs
+      # SOURCE_TOKEN to have Issues read and write. A failure here leaves the status above in place.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Open, update or close the main-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
+          : > "$RUNNER_TEMP/failed.log"
+          if [ "$state" = failure ]; then
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id'); do
+              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> "$RUNNER_TEMP/failed.log" || true
+            done
+          fi
+          GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-unit-tests "$SHA" "$state" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/failed.log"

@@ -2,10 +2,10 @@ name: Main E2E
 # Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
 # main-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
 # .github/workflows/main-e2e.yml.
-# sweep.yml starts it on main's newest commit when that commit has no `main-e2e` status and the last run is an hour old
+# sweep.yml starts it on main's newest commit when that commit has no `main-e2e` status and the last run is 30 minutes old
 # (its schedule below is only a backup: GitHub fires schedules here rarely); it runs the
 # release's end-to-end suite on it (the e2e job of release.yml, split over four runners) and posts the result there.
-# A spec that a merged change left stale then shows within about an hour, not at the next release; the merges since the
+# A spec that a merged change left stale then shows within about 40 minutes, not at the next release; the merges since the
 # last green `main-e2e` commit are the ones to look at. scripts/merge-gate.mjs reports the newest result to whoever
 # merges next. The suite may run here because a GitHub Actions runner is nobody's desktop (scripts/release-suites.cjs).
 # Started by hand for one commit: gh workflow run main-e2e.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>

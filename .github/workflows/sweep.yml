@@ -4,7 +4,7 @@ name: Sweep
 # Whenever a pull request check or a run on main finishes, it runs scripts/ci-sweep.mjs from a checkout of main: it
 # starts the unit-tests check for open pull requests whose head has none, merges pull requests labeled
 # `merge-on-green` that the merge gate allows, and starts main-unit-tests (at most every ten minutes) and main-e2e (at
-# most hourly) on an untested main. GitHub's schedule events are best effort and were rarely fired here, so finishing
+# most every 30 minutes) on an untested main. GitHub's schedule events are best effort and were rarely fired here, so finishing
 # runs drive it; the schedule below is only a backup, and starting it by hand runs one sweep.
 #
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,

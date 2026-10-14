@@ -17,7 +17,8 @@ name: Release
 # A failed job can be re-run on its own (Re-run failed jobs): uploads and registration are idempotent.
 #
 # Secrets (on the release repository): SOURCE_TOKEN, MOPILOT_DEVELOPER_ID_P12(+_PASSWORD), MOPILOT_SIGN_IDENTITY,
-# APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER, RELEASE_PUBLISH_TOKEN, and on the `release` environment AZURE_SIGN_CLIENT_ID (an app
+# APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER, RELEASE_PUBLISH_TOKEN, optionally MOPILOT_PROVISIONING_PROFILE
+# (base64; see the mac job), and on the `release` environment AZURE_SIGN_CLIENT_ID (an app
 # registration in the signing tenant with "Artifact Signing Certificate Profile Signer" on mopilot-signing
 # and a federated credential for the `release` environment; GitHub's subject for it carries the owner and
 # repository IDs: repo:<owner>@<owner id>/<repository>@<repository id>:environment:release). Variable
@@ -177,6 +178,16 @@ jobs:
         run: |
           echo "$KEY" > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      # Optional: a Developer ID provisioning profile granting the WebAuthn keychain group (Touch ID passkeys in
+      # the in-app browser). Without one the app ships without the group; claiming it unprofiled kills the app.
+      - name: Write provisioning profile
+        env:
+          PROFILE: ${{ secrets.MOPILOT_PROVISIONING_PROFILE }}
+        run: |
+          if [ -n "$PROFILE" ]; then
+            echo "$PROFILE" | base64 --decode > "$RUNNER_TEMP/mopilot.provisionprofile"
+            echo "MOPILOT_PROVISIONING_PROFILE=$RUNNER_TEMP/mopilot.provisionprofile" >> "$GITHUB_ENV"
+          fi
       # Electron's download (and electron-builder's NSIS kit), kept between runs
       - uses: actions/cache@v4
         with:
@@ -184,6 +195,7 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
             ~/.cache/electron-builder
+            ~/Library/Caches/electron-builder
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci

@@ -125,8 +125,14 @@ jobs:
           if [ "$RESULT" = success ]; then state=success; else state=failure; fi
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then
-            for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id'); do
-              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" >> "$RUNNER_TEMP/failed.log" || true
+            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id')
+            # no failed job (one skipped or cancelled) is not an unreadable log
+            [ -n "$ids" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
+            for id in $ids; do
+              # not gh api, which refuses a log with terminal escape sequences (every issue before #842 named no test);
+              # a log that cannot be read leaves the file empty and the issue says so
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" \
+                >> "$RUNNER_TEMP/failed.log" || echo "::warning::Could not read the log of job $id"
             done
           fi
           GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-e2e "$SHA" "$state" \

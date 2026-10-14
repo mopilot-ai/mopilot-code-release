@@ -4,17 +4,14 @@ name: PR unit tests
 # there as .github/workflows/pr-unit-tests.yml. It lives outside .github/workflows here so the source
 # repository never schedules it.
 # For a pull request against main it runs the checks the pre-commit hook runs (scripts/precommit.mjs: Biome's
-# format and lint errors, both TypeScript configs and the module map, plus the web app's types), so a commit
+# format and lint errors, both TypeScript configs and the source header comments, plus the web app's types), so a commit
 # made where the hook did not run is still checked; then the lint ratchet (npm run lint:ratchet --
-# --base=<main>; docs/bug-prevention.md) and the unit tests that reach the change, with changed-line coverage enforced
+# --base=<main>; docs/bug-prevention/README.md) and the unit tests that reach the change, with changed-line coverage enforced
 # (npm run test:coverage -- --changed=<main> --related; docs/unit-coverage.md), on the pull request's head commit
 # merged with main as it is when the run starts, and posts the result on the head commit as the commit status
-# `unit-tests`, naming that main commit ("merged with main <sha>"). Generated files (the module map) are checked on the
-# head commit itself, before main is merged in, so a pull request whose own map is stale fails; after the merge they
-# are always rebuilt from the merged tree (scripts/merge-generated.mjs --always), since even a
-# clean textual merge can leave them stale, and a conflict only in them does not fail it. The status says when the
-# rebuild changed one; any other conflict fails it. A change without source or test files passes
-# without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
+# `unit-tests`, naming that main commit ("merged with main <sha>"). The module map is generated and not committed; a
+# branch from before that still holds it, and the merge drops it (scripts/merge-generated.mjs), so a conflict only there
+# does not fail the check; any other conflict does. A change without source or test files passes without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -44,7 +41,6 @@ jobs:
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
-      rebuilt: ${{ steps.merge.outputs.rebuilt }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -73,17 +69,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
-      # the pre-commit hook's module map check, on the head commit as the pull request has it, before main is merged
-      # in: the merge below rebuilds the map, so this is where a pull request's own stale map fails (it needs only Node)
+      # the pre-commit hook's header check: every source file has a one-line header comment (it needs only Node)
       - run: npm run module-map -- --check
-      # what merging would produce. A conflict only in generated files (docs/module-map.md) takes main's copy; then,
-      # conflict or not, they are rebuilt from the merged tree, since a clean textual merge of two maps can still differ
-      # from what the generator writes. main's scripts/merge-generated.mjs merges (the pull request may predate it);
-      # the merged tree's own generators rebuild, as merge-on-green's result has it (a pull request that changes one is
-      # merged only once it contains main), with no credentials here (the checkout keeps none). Any other conflict
-      # fails the check (merge main into the branch and push)
+      # what merging would produce. main's scripts/merge-generated.mjs merges (the pull request may predate it) and
+      # drops the generated files main no longer commits (docs/module-map.md), so a conflict only there is none, as
+      # merge-on-green's result has it. Any other conflict fails the check (merge main into the branch and push)
       - name: Merge main into the pull request
-        id: merge
         env:
           BASE_SHA: '${{ steps.pr.outputs.base_sha }}'
           GIT_AUTHOR_NAME: pr-unit-tests
@@ -93,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
-          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA" --always
+          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
       # Electron's download, kept between runs
       - uses: actions/cache@v4
         with:
@@ -109,7 +100,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck
         working-directory: web
-      # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention.md);
+      # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention/README.md);
       # a pull request branched before the ratchet existed has nothing to run
       - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ steps.pr.outputs.base_sha }}; fi
       - run: npm run test:coverage -- --changed=${{ steps.pr.outputs.base_sha }} --related
@@ -125,14 +116,10 @@ jobs:
           SHA: ${{ needs.test.outputs.sha }}
           BASE_SHA: ${{ needs.test.outputs.base_sha }}
           RESULT: ${{ needs.test.result }}
-          # the generated files the merge's rebuild changed (a conflict with main, or a clean merge left them stale)
-          REBUILT: ${{ needs.test.outputs.rebuilt }}
         run: |
           set -euo pipefail
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
-          if [ "$RESULT" = success ] && [ -n "$REBUILT" ]; then
-            state=success; description="Passed merged with main $BASE_SHA (generated files rebuilt): static checks, ratchet, unit tests, coverage"
-          elif [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
+          if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
           gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null

@@ -1,7 +1,7 @@
 name: Release
 # Started from Admin → Releases → "Release main" (web/lib/releaseRun.ts), or by hand:
 #   gh workflow run release.yml -R mopilot-ai/mopilot-code-release -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
-# It runs in a private release repository (mopilot-ai/mopilot-code-release, whose Actions billing works) that
+# It runs in a public release repository (mopilot-ai/mopilot-code-release, whose Actions minutes are free) that
 # holds only this file, pr-unit-tests.yml and the signing secrets: variable SOURCE_REPO names this repository, and secret
 # SOURCE_TOKEN (Contents read and write on it; pr-unit-tests.yml also needs Commit statuses read and write and Pull
 # requests read) checks the commit out and pushes the release tag here.
@@ -14,6 +14,10 @@ name: Release
 # macOS jobs at a time, so the three builds then start at once instead of waiting for a test shard's runner.
 # Only once every suite has passed is anything uploaded and registered as a draft; once all three are, the commit
 # is tagged v<version> and, when publish_pct is given, the release is published.
+# Each build is uploaded to mopilot.ai (which keeps every file, and each build's SHA-256 and size) and then also to
+# the GitHub release v<version> of the repository this runs in (a pre-release unless the channel is stable), which
+# the update feed and download page then link to (scripts/github-release.mjs). That step may fail (or time out)
+# without failing the run: the build is then served from mopilot.ai. Without SOURCE_REPO it is skipped.
 # A failed job can be re-run on its own (Re-run failed jobs): uploads and registration are idempotent.
 #
 # Secrets (on the release repository): SOURCE_TOKEN, MOPILOT_DEVELOPER_ID_P12(+_PASSWORD), MOPILOT_SIGN_IDENTITY,
@@ -251,6 +255,8 @@ jobs:
     needs: [mac, unit, e2e]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
+    # creates the GitHub release and uploads to it
+    permissions: { contents: write }
     strategy:
       # one architecture failing doesn't hide the other's result
       fail-fast: false
@@ -269,6 +275,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: 'mac-${{ matrix.arch }}', path: out }
       - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api --upload-only
+      # only in the separate release repository: in the source repository the release would create the tag finish pushes
+      - if: vars.SOURCE_REPO != ''
+        continue-on-error: true
+        timeout-minutes: 30
+        run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform darwin --arch ${{ matrix.arch }} --dir out
+        env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
 
   # On macOS, as from a developer's Mac: electron-builder reads the NSIS uninstaller out of the installer
   # itself there, where on Linux it would need Wine.
@@ -346,6 +358,8 @@ jobs:
     needs: [windows-verify, unit, e2e]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
+    # creates the GitHub release and uploads to it
+    permissions: { contents: write }
     env:
       RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
     steps:
@@ -359,6 +373,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: windows, path: out }
       - run: node scripts/release.mjs --platform win32 --arch x64 --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api
+      # only in the separate release repository: in the source repository the release would create the tag finish pushes
+      - if: vars.SOURCE_REPO != ''
+        continue-on-error: true
+        timeout-minutes: 30
+        run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform win32 --arch x64 --dir out
+        env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
 
   # Only when every platform is registered: tag the commit, then publish if asked.
   finish:

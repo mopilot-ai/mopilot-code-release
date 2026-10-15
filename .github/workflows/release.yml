@@ -79,14 +79,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: release-notes, path: docs/release-notes.md, retention-days: 1 }
 
-  # The release-only suites (AGENTS.md), on the commit being built: typecheck, unit and web tests on one
-  # runner, the end-to-end suite split over four. They run while the builds do; nothing is uploaded until
+  # The release-only suites (AGENTS.md), on the commit being built: typecheck, unit and web tests on Linux with
+  # the unit tests that need a real Mac on macOS (scripts/mac-only-tests.mjs), the end-to-end suite split over four. They run while the builds do; nothing is uploaded until
   # they pass. Each is skipped when main's run of it (.github/release-repo/main-unit-tests.yml, main-e2e.yml) has
   # already passed on this commit; tests/releaseSuitesMatch.test.ts keeps those runs the same as these jobs.
   unit:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -107,6 +107,24 @@ jobs:
       - run: npm test
       - run: npm ci && npm run typecheck && npm test
         working-directory: web
+
+  unit-mac:
+    needs: plan
+    if: needs.plan.outputs.unit == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 
   e2e:
     needs: plan
@@ -252,7 +270,7 @@ jobs:
   # main already passed it doesn't hold this up, but a failed or cancelled one does (a skip otherwise skips
   # every job after it, so this and each later job says so).
   mac-release:
-    needs: [mac, unit, e2e]
+    needs: [mac, unit, unit-mac, e2e]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     # creates the GitHub release and uploads to it
@@ -355,7 +373,7 @@ jobs:
           }
 
   windows-release:
-    needs: [windows-verify, unit, e2e]
+    needs: [windows-verify, unit, unit-mac, e2e]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     # creates the GitHub release and uploads to it

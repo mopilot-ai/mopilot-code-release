@@ -103,6 +103,8 @@ jobs:
       # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention/README.md);
       # a pull request branched before the ratchet existed has nothing to run
       - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ steps.pr.outputs.base_sha }}; fi
+      # Same staged-content policy as pre-commit, applied to the merged tree against current main; no extra job.
+      - run: node scripts/file-size.mjs --base=${{ steps.pr.outputs.base_sha }}
       - run: npm run test:coverage -- --changed=${{ steps.pr.outputs.base_sha }} --related
 
   report:

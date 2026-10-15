@@ -12,6 +12,9 @@ name: PR unit tests
 # `unit-tests`, naming that main commit ("merged with main <sha>"). The module map is generated and not committed; a
 # branch from before that still holds it, and the merge drops it (scripts/merge-generated.mjs), so a conflict only there
 # does not fail the check; any other conflict does. A change without source or test files passes without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
+# It runs on Linux: the free plan here runs five macOS jobs at once and about twenty Linux ones. When a related test
+# needs a real Mac (scripts/mac-only-tests.mjs), the Linux job runs the static checks and job `mac` runs the tests on
+# macOS instead (docs/unit-coverage.md#runners).
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -37,10 +40,11 @@ env:
 jobs:
   test:
     if: vars.SOURCE_REPO != ''
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
+      mac: ${{ steps.runner.outputs.mac }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -56,16 +60,9 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
-          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the unit tests that reach this change' \
-            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{state: $state, context: $context, description: $description, target_url: $target_url}')
-          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
-            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
-            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
-            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
-            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$sha")
-          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+          gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
+            -f description='Running the unit tests that reach this change' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
@@ -112,10 +109,51 @@ jobs:
       - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ steps.pr.outputs.base_sha }}; fi
       # Same staged-content policy as pre-commit, applied to the merged tree against current main; no extra job.
       - run: node scripts/file-size.mjs --base=${{ steps.pr.outputs.base_sha }}
-      - run: npm run test:coverage -- --changed=${{ steps.pr.outputs.base_sha }} --related
+      # a related test that needs a real Mac sends the tests to job `mac`
+      - id: runner
+        run: node scripts/mac-only-tests.mjs --changed=${{ steps.pr.outputs.base_sha }}
+      - if: steps.runner.outputs.mac != 'true'
+        run: npm run test:coverage -- --changed=${{ steps.pr.outputs.base_sha }} --related
+
+  # the same merged tree's tests on macOS, only when one of them needs a Mac; the static checks already ran
+  mac:
+    needs: test
+    if: needs.test.outputs.mac == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.test.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - name: Merge main into the pull request
+        env:
+          BASE_SHA: '${{ needs.test.outputs.base_sha }}'
+          GIT_AUTHOR_NAME: pr-unit-tests
+          GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
+          GIT_COMMITTER_NAME: pr-unit-tests
+          GIT_COMMITTER_EMAIL: pr-unit-tests@invalid
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
+          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm ci
+        working-directory: web
+      - run: npm run test:coverage -- --changed=${{ needs.test.outputs.base_sha }} --related
 
   report:
-    needs: test
+    needs: [test, mac]
     if: ${{ !cancelled() && needs.test.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:
@@ -125,19 +163,15 @@ jobs:
           SHA: ${{ needs.test.outputs.sha }}
           BASE_SHA: ${{ needs.test.outputs.base_sha }}
           RESULT: ${{ needs.test.result }}
+          MAC: ${{ needs.test.outputs.mac }}
+          MAC_RESULT: ${{ needs.mac.result }}
         run: |
           set -euo pipefail
+          # the macOS job counts when the tests were sent there; skipped, it ran nothing that was needed
+          if [ "$MAC" = true ] && [ "$MAC_RESULT" != success ]; then RESULT=$MAC_RESULT; fi
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
-          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
-          payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
-            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{state: $state, context: $context, description: $description, target_url: $target_url}')
-          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
-            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
-            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
-            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
-            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
-          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+          gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"

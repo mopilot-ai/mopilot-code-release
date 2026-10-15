@@ -60,9 +60,16 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          gh api "repos/$SOURCE_REPO/statuses/$sha" -f state=pending -f context="$STATUS_CONTEXT" \
-            -f description='Running the unit tests that reach this change' \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the unit tests that reach this change' \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$sha")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
@@ -172,6 +179,14 @@ jobs:
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
-          gh api "repos/$SOURCE_REPO/statuses/$SHA" -f state="$state" -f context="$STATUS_CONTEXT" -f description="$description" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"

@@ -7,6 +7,8 @@ name: Main unit tests
 # and posts the result there. Commits that landed together are covered by the newest one. It catches what each pull
 # request's related tests cannot: two changes that pass alone and fail together, a test no import leads to, a
 # whole-repository invariant. scripts/merge-gate.mjs reports the newest result to whoever merges next.
+# The suite runs on Linux, and job `mac` runs the tests that need a real Mac (scripts/mac-only-tests.mjs --all) on
+# macOS, so a run holds one of the five macOS slots only for those (docs/unit-coverage.md#runners).
 # Started by hand for one commit: gh workflow run main-unit-tests.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>
 #
 # Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read, Commit statuses read and write), plus Issues
@@ -58,7 +60,7 @@ jobs:
   test:
     needs: pick
     if: needs.pick.outputs.sha != ''
-    runs-on: macos-14
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,8 +83,32 @@ jobs:
       - run: npm ci && npm run typecheck && npm test
         working-directory: web
 
+  # the tests that need a real Mac, which the Linux job skips or checks only in part
+  mac:
+    needs: pick
+    if: needs.pick.outputs.sha != ''
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      # npm test's flags on just these files (measured, not enforced: the coverage gate is the pull request's)
+      - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
+
   report:
-    needs: [pick, test]
+    needs: [pick, test, mac]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
     # actions: read for the failed jobs' logs, which name the failing tests
@@ -93,8 +119,10 @@ jobs:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
+          MAC_RESULT: ${{ needs.mac.result }}
         run: |
           set -euo pipefail
+          if [ "$MAC_RESULT" != success ]; then RESULT=$MAC_RESULT; fi
           if [ "$RESULT" = success ]; then state=success; description='Typecheck, the full unit suite and the web tests passed'
           else state=failure; description='Typecheck, the full unit suite or the web tests failed'; fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
@@ -123,9 +151,10 @@ jobs:
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
+          MAC_RESULT: ${{ needs.mac.result }}
         run: |
           set -euo pipefail
-          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
+          if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ]; then state=success; else state=failure; fi
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then
             ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id')

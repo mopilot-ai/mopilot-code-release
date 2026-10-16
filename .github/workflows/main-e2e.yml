@@ -42,6 +42,18 @@ jobs:
         run: |
           set -euo pipefail
           sha=${SHA:-$(gh api "repos/$SOURCE_REPO/git/ref/heads/main" --jq .object.sha)}
+          # Status reads accept abbreviated SHAs, but creating a status needs the full commit identity.
+          if [ -n "${SHA:-}" ] && ! [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            [[ "$sha" =~ ^[0-9a-fA-F]{1,39}$ ]] || { echo "::error::Expected a full or abbreviated commit SHA"; exit 1; }
+            short_sha=$sha
+            sha=$(gh api "repos/$SOURCE_REPO/commits/$short_sha" --jq .sha) || {
+              echo "::error::Could not resolve the abbreviated commit SHA"; exit 1;
+            }
+            # Check identity as well as shape; keep case matching local to this test (also works on Bash 3).
+            if ! [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]] || ! (shopt -s nocasematch; [[ "$sha" == "$short_sha"* ]]); then
+              echo "::error::Could not resolve the abbreviated commit SHA"; exit 1;
+            fi
+          fi
           seen=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
           # a scheduled run leaves a tested (or testing) commit alone; a run started by hand tests it again (a flake)
           if [ "$seen" != 0 ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then echo "main at $sha already has $STATUS_CONTEXT"; exit 0; fi

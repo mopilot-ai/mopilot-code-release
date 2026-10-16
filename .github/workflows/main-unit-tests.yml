@@ -99,7 +99,7 @@ jobs:
   mac:
     needs: pick
     if: needs.pick.outputs.sha != ''
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:

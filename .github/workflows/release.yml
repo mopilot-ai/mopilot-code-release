@@ -111,7 +111,7 @@ jobs:
   unit-mac:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -129,7 +129,7 @@ jobs:
   e2e:
     needs: plan
     if: needs.plan.outputs.e2e == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -164,7 +164,7 @@ jobs:
 
   mac:
     needs: plan
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       # one architecture failing doesn't hide the other's result
       fail-fast: false
@@ -304,7 +304,7 @@ jobs:
   # itself there, where on Linux it would need Wine.
   windows:
     needs: plan
-    runs-on: macos-14
+    runs-on: macos-15
     environment: release
     permissions: { contents: read, id-token: write }
     steps:

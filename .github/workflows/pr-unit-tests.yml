@@ -12,9 +12,11 @@ name: PR unit tests
 # `unit-tests`, naming that main commit ("merged with main <sha>"). The module map is generated and not committed; a
 # branch from before that still holds it, and the merge drops it (scripts/merge-generated.mjs), so a conflict only there
 # does not fail the check; any other conflict does. A change without source or test files passes without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
-# It runs on Linux: the free plan here runs five macOS jobs at once and about twenty Linux ones. When a related test
-# needs a real Mac (scripts/mac-only-tests.mjs), the Linux job runs the static checks and job `mac` runs the tests on
-# macOS instead (docs/unit-coverage.md#runners).
+# Job `plan` finds the related tests and splits them (scripts/test-shards.mjs): the free plan here runs five macOS jobs
+# at once and about twenty Linux ones, so job `static` runs the static checks, job `unit` runs the tests on up to four
+# Linux shards, job `mac` runs only the related tests that need a real Mac (scripts/mac-only-tests.mjs), and when more
+# than one job tested, job `coverage` merges their raw coverage into one report and checks the changed lines
+# (docs/unit-coverage.md#runners). A change one Linux shard can test checks its coverage in that shard.
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -38,13 +40,17 @@ env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
   STATUS_CONTEXT: unit-tests
 jobs:
-  test:
+  # the pull request's head and main as they are now, which every other job tests, and how the related tests split
+  plan:
     if: vars.SOURCE_REPO != ''
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
-      mac: ${{ steps.runner.outputs.mac }}
+      shards: ${{ steps.split.outputs.shards }}
+      mac: ${{ steps.split.outputs.mac }}
+      split: ${{ steps.split.outputs.split }}
+      digest: ${{ steps.split.outputs.digest }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -80,6 +86,36 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - name: Merge main into the pull request
+        env:
+          BASE_SHA: '${{ steps.pr.outputs.base_sha }}'
+          GIT_AUTHOR_NAME: pr-unit-tests
+          GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
+          GIT_COMMITTER_NAME: pr-unit-tests
+          GIT_COMMITTER_EMAIL: pr-unit-tests@invalid
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
+          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      # the related-test search needs no Electron or install script, only the modules it reads with
+      - run: npm ci --ignore-scripts
+      - id: split
+        run: node scripts/test-shards.mjs plan --changed=${{ steps.pr.outputs.base_sha }}
+
+  static:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.plan.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the whole history, so the change is measured from its merge base with the target branch
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
       # the pre-commit hook's header check: every source file has a one-line header comment (it needs only Node)
       - run: npm run module-map -- --check
       # what merging would produce. main's scripts/merge-generated.mjs merges (the pull request may predate it) and
@@ -87,7 +123,7 @@ jobs:
       # merge-on-green's result has it. Any other conflict fails the check (merge main into the branch and push)
       - name: Merge main into the pull request
         env:
-          BASE_SHA: '${{ steps.pr.outputs.base_sha }}'
+          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
           GIT_AUTHOR_NAME: pr-unit-tests
           GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
           GIT_COMMITTER_NAME: pr-unit-tests
@@ -113,33 +149,32 @@ jobs:
         working-directory: web
       # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention/README.md);
       # a pull request branched before the ratchet existed has nothing to run
-      - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ steps.pr.outputs.base_sha }}; fi
+      - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ needs.plan.outputs.base_sha }}; fi
       # Same staged-content policy as pre-commit, applied to the merged tree against current main; no extra job.
-      - run: node scripts/file-size.mjs --base=${{ steps.pr.outputs.base_sha }}
-      # a related test that needs a real Mac sends the tests to job `mac`
-      - id: runner
-        run: node scripts/mac-only-tests.mjs --changed=${{ steps.pr.outputs.base_sha }}
-      - if: steps.runner.outputs.mac != 'true'
-        run: npm run test:coverage -- --changed=${{ steps.pr.outputs.base_sha }} --related
+      - run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
 
-  # the same merged tree's tests on macOS, only when one of them needs a Mac; the static checks already ran
-  mac:
-    needs: test
-    if: needs.test.outputs.mac == 'true'
-    runs-on: macos-15
+  # the related tests that run anywhere, round-robin across the planned Linux shards
+  unit:
+    needs: plan
+    if: needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
-          ref: ${{ needs.test.outputs.sha }}
+          ref: ${{ needs.plan.outputs.sha }}
           token: ${{ secrets.SOURCE_TOKEN }}
+          # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
       - name: Merge main into the pull request
         env:
-          BASE_SHA: '${{ needs.test.outputs.base_sha }}'
+          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
           GIT_AUTHOR_NAME: pr-unit-tests
           GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
           GIT_COMMITTER_NAME: pr-unit-tests
@@ -148,6 +183,7 @@ jobs:
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
           node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      # Electron's download, kept between runs
       - uses: actions/cache@v4
         with:
           path: |
@@ -157,25 +193,135 @@ jobs:
       - run: npm ci
       - run: npm ci
         working-directory: web
-      - run: npm run test:coverage -- --changed=${{ needs.test.outputs.base_sha }} --related
+      # this shard's part of the plan (refused when this checkout finds other tests); with one shard and no Mac, the job
+      # also checks the change's coverage, as `npm run test:coverage -- --changed=<main> --related` does; otherwise it
+      # packs the raw coverage for job `coverage`
+      - env:
+          MODE: ${{ needs.plan.outputs.split == 'true' && '--raw-out coverage/raw' || format('--changed={0}', needs.plan.outputs.base_sha) }}
+        run: |
+          files=$(node scripts/test-shards.mjs files --changed=${{ needs.plan.outputs.base_sha }} --plan=${{ needs.plan.outputs.digest }} --shard=${{ matrix.shard }}/${{ strategy.job-total }})
+          npm run test:coverage -- $MODE $files
+      # public, like the logs: the repository's own scripts' coverage, without their source text (scripts/raw-coverage.mjs).
+      # Named for the tree and the plan, so a re-run that planned other tests never merges this attempt's upload
+      - if: needs.plan.outputs.split == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-${{ matrix.shard }}
+          path: coverage/raw
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  # only the related tests that need a real Mac; the rest ran on Linux
+  mac:
+    needs: plan
+    if: needs.plan.outputs.mac == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.plan.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the whole history, so the change is measured from its merge base with the target branch
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - name: Merge main into the pull request
+        env:
+          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
+          GIT_AUTHOR_NAME: pr-unit-tests
+          GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
+          GIT_COMMITTER_NAME: pr-unit-tests
+          GIT_COMMITTER_EMAIL: pr-unit-tests@invalid
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
+          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      # Electron's download, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm ci
+        working-directory: web
+      - run: |
+          files=$(node scripts/test-shards.mjs files --changed=${{ needs.plan.outputs.base_sha }} --plan=${{ needs.plan.outputs.digest }} --mac)
+          npm run test:coverage -- --raw-out coverage/raw $files
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-mac
+          path: coverage/raw
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  # every testing job's coverage as one report, and the changed-line check a single job would have made
+  coverage:
+    needs: [plan, unit, mac]
+    if: ${{ !cancelled() && needs.plan.outputs.split == 'true' && !contains(fromJSON('["failure", "cancelled"]'), needs.unit.result) && !contains(fromJSON('["failure", "cancelled"]'), needs.mac.result) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.plan.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the whole history, so the change is measured from its merge base with the target branch
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - name: Merge main into the pull request
+        env:
+          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
+          GIT_AUTHOR_NAME: pr-unit-tests
+          GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
+          GIT_COMMITTER_NAME: pr-unit-tests
+          GIT_COMMITTER_EMAIL: pr-unit-tests@invalid
+        run: |
+          set -euo pipefail
+          git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
+          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      # c8 and the coverage check need no Electron
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-*
+          path: coverage/raw
+          merge-multiple: true
+      - run: node scripts/test-shards.mjs merge --changed=${{ needs.plan.outputs.base_sha }} coverage/raw
 
   report:
-    needs: [test, mac]
-    if: ${{ !cancelled() && needs.test.outputs.sha != '' }}
+    needs: [plan, static, unit, mac, coverage]
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Post the result on the pull request's head commit
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
-          SHA: ${{ needs.test.outputs.sha }}
-          BASE_SHA: ${{ needs.test.outputs.base_sha }}
-          RESULT: ${{ needs.test.result }}
-          MAC: ${{ needs.test.outputs.mac }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          RESULT: ${{ needs.static.result }}
+          PLAN_RESULT: ${{ needs.plan.result }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          MAC: ${{ needs.plan.outputs.mac }}
           MAC_RESULT: ${{ needs.mac.result }}
+          SPLIT: ${{ needs.plan.outputs.split }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           set -euo pipefail
-          # the macOS job counts when the tests were sent there; skipped, it ran nothing that was needed
-          if [ "$MAC" = true ] && [ "$MAC_RESULT" != success ]; then RESULT=$MAC_RESULT; fi
+          # every job the plan needed counts; one it skipped ran nothing that was needed
+          need() { if [ "$1" = true ] && [ "$2" != success ]; then RESULT=$2; fi; }
+          need true "$PLAN_RESULT"
+          need "$([ "$SHARDS" = '[]' ] && echo false || echo true)" "$UNIT_RESULT"
+          need "$MAC" "$MAC_RESULT"
+          need "$SPLIT" "$COVERAGE_RESULT"
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi

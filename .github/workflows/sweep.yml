@@ -7,8 +7,14 @@ name: Sweep
 # most every 30 minutes) on an untested main. GitHub's schedule events are best effort and were rarely fired here, so finishing
 # runs drive it; the schedule below is only a backup, and starting it by hand runs one sweep.
 #
+# Then it copies main's workflows here (scripts/sync-release-repo.sh, which writes only the files that differ): a
+# workflow merged on main does nothing here until copied, and a release refuses a release.yml other than the one it
+# builds. 0.3.33 failed that way after merge-on-green merged a release.yml change nobody then copied.
+#
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
 # Pull requests read). github.token starts the other workflows here.
+# Secret WORKFLOW_SYNC_TOKEN: a fine-grained token with Contents and Workflows read and write on this repository only,
+# for the copy (github.token cannot change workflows). Without it the sweep warns instead of copying.
 run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}
 on:
   workflow_run:
@@ -29,6 +35,8 @@ jobs:
   sweep:
     if: vars.SOURCE_REPO != ''
     runs-on: ubuntu-latest
+    env:
+      HAS_SYNC_TOKEN: ${{ secrets.WORKFLOW_SYNC_TOKEN != '' }}
     steps:
       # main's code, never a pull request's, with the token the merge gate's fetch needs
       - uses: actions/checkout@v4
@@ -38,3 +46,10 @@ jobs:
       - name: Start missing checks, merge on green, start the runs on main when due
         env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
         run: node scripts/ci-sweep.mjs
+      # after the merges above, and even when a step of the sweep failed; main as it is now, fetched again by the script
+      - name: Copy main's workflows here
+        if: ${{ !cancelled() && env.HAS_SYNC_TOKEN == 'true' }}
+        env: { GH_TOKEN: '${{ secrets.WORKFLOW_SYNC_TOKEN }}', RELEASE_REPO: '${{ github.repository }}' }
+        run: bash scripts/sync-release-repo.sh origin/main
+      - if: ${{ !cancelled() && env.HAS_SYNC_TOKEN != 'true' }}
+        run: echo "::warning::Set the secret WORKFLOW_SYNC_TOKEN so the sweep copies main's workflows here; until then run scripts/sync-release-repo.sh after merging a workflow change."

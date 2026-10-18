@@ -254,6 +254,13 @@ jobs:
           REQ=$(/usr/libexec/PlistBuddy -c 'Print :MPCPeerRequirement' "$HELPER/Contents/Info.plist")
           codesign --verify -R="$REQ" "$APP"
           find "$UNPACKED" -type f -print0 | xargs -0 -n1 sh -c 'codesign --verify --strict -vv "$0" && codesign -dv "$0" 2>&1 | grep -q "flags=.*runtime" || { echo "not signed with hardened runtime: $0"; exit 255; }'
+      # Start the packaged app once (scripts/smoke-launch.mjs): the tests run the source tree, so only this sees what
+      # the shipped app lacks, such as a package the prune dropped. The x64 app runs under Rosetta.
+      - run: |
+          if [ "${{ matrix.arch }}" = x64 ] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          node scripts/smoke-launch.mjs "out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
       # zip and DMG; the DMG is signed, notarized, stapled and assessed. Uploading waits for the tests (mac-release).
       - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --build-only
       - uses: actions/upload-artifact@v4
@@ -358,6 +365,10 @@ jobs:
     needs: windows
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - uses: actions/download-artifact@v4
         with: { name: windows, path: win }
       - shell: pwsh
@@ -371,6 +382,17 @@ jobs:
             if ($s.SignerCertificate.Subject -notmatch 'O=MoPilot LLC') { throw "$($f.Name): signed by $($s.SignerCertificate.Subject)" }
             if (-not $s.TimeStamperCertificate) { throw "$($f.Name): no timestamp" }
           }
+      # Install it for this user, as a person would, and start it once (scripts/smoke-launch.mjs): the tests run the
+      # source tree, so only this sees what the shipped app lacks.
+      - shell: pwsh
+        run: |
+          $setup = Get-ChildItem -Recurse -File win -Filter 'MoPilot-Code-Setup-*.exe' | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          # wherever the installer put it for this user (under %LOCALAPPDATA%\Programs)
+          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot Code.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'the installer left no MoPilot Code.exe under LOCALAPPDATA\Programs' }
+          node scripts/smoke-launch.mjs $exe.DirectoryName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   windows-release:
     needs: [windows-verify, unit, unit-mac, e2e]

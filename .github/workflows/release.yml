@@ -9,7 +9,9 @@ name: Release
 # the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
 # Builds that commit of main for macOS arm64 and x64 and Windows x64 while the release suites run (unit and
 # web on one runner, end-to-end over four): macOS is signed, notarized and stapled (app and DMG), Windows is
-# Authenticode-signed with Azure Artifact Signing and checked on Windows. A suite that main-unit-tests.yml or
+# Authenticode-signed with Azure Artifact Signing and checked on Windows. Each packaged app is started once before
+# it uploads (scripts/smoke-launch.mjs), on its own architecture: arm64 where it is built, x64 on an Intel runner
+# (mac-x64-verify), Windows after a per-user install (windows-verify). A suite that main-unit-tests.yml or
 # main-e2e.yml already passed on that commit is not run again (scripts/releasePlan.mjs): the account runs five
 # macOS jobs at a time, so the three builds then start at once instead of waiting for a test shard's runner.
 # Only once every suite has passed is anything uploaded and registered as a draft; once all three are, the commit
@@ -255,12 +257,10 @@ jobs:
           codesign --verify -R="$REQ" "$APP"
           find "$UNPACKED" -type f -print0 | xargs -0 -n1 sh -c 'codesign --verify --strict -vv "$0" && codesign -dv "$0" 2>&1 | grep -q "flags=.*runtime" || { echo "not signed with hardened runtime: $0"; exit 255; }'
       # Start the packaged app once (scripts/smoke-launch.mjs): the tests run the source tree, so only this sees what
-      # the shipped app lacks, such as a package the prune dropped. The x64 app runs under Rosetta.
-      - run: |
-          if [ "${{ matrix.arch }}" = x64 ] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
-            sudo softwareupdate --install-rosetta --agree-to-license
-          fi
-          node scripts/smoke-launch.mjs "out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
+      # the shipped app lacks, such as a package the prune dropped. The x64 app is started on an Intel Mac instead
+      # (mac-x64-verify): under Rosetta on these arm64 runners it never finished starting (0.3.33).
+      - if: matrix.arch == 'arm64'
+        run: node scripts/smoke-launch.mjs "out/MoPilot Code-darwin-arm64/MoPilot Code.app"
       # zip and DMG; the DMG is signed, notarized, stapled and assessed. Uploading waits for the tests (mac-release).
       - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --build-only
       - uses: actions/upload-artifact@v4
@@ -273,11 +273,27 @@ jobs:
             out/MoPilot-Code-*-${{ matrix.arch }}.zip
             out/MoPilot-Code-*-${{ matrix.arch }}.dmg
 
+  # The x64 app as an Intel Mac runs it, from the zip the release uploads (signed, notarized and stapled): started
+  # once, like the arm64 app in its own job.
+  mac-x64-verify:
+    needs: mac
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: actions/download-artifact@v4
+        with: { name: mac-x64, path: out }
+      - run: |
+          ditto -x -k out/MoPilot-Code-*-x64.zip "$RUNNER_TEMP/x64"
+          node scripts/smoke-launch.mjs "$RUNNER_TEMP/x64/MoPilot Code.app"
+
   # Once every suite has passed: upload the macOS artifacts and register them as drafts. A suite skipped because
   # main already passed it doesn't hold this up, but a failed or cancelled one does (a skip otherwise skips
   # every job after it, so this and each later job says so).
   mac-release:
-    needs: [mac, unit, unit-mac, e2e]
+    needs: [mac, mac-x64-verify, unit, unit-mac, e2e]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     # creates the GitHub release and uploads to it

@@ -1,0 +1,40 @@
+name: Watch
+# Runs in the public release repository (mopilot-ai/mopilot-code-release), like sweep.yml beside it;
+# scripts/sync-release-repo.sh copies this file there as .github/workflows/watch.yml.
+# It runs scripts/ci-watch.mjs from a checkout of main: every minute it reads the open pull requests and main's newest
+# commit, and starts sweep.yml when a pull request head has no unit-tests check or main has no run on main. The sweep
+# otherwise runs only when a run finishes, and GitHub rarely fires its schedule, so on a quiet main a new pull request
+# (#1644, the fix for a red main) waited 40 minutes with no check. One run holds one of the account's Linux runners for
+# 5.5 hours, then starts the next run and ends. Every watcher run that ends starts a sweep (sweep.yml), and every sweep
+# starts a watcher when none is queued or running, so one lost to a runner failure or a cancel is replaced (but not one
+# that ended within ten minutes of starting, which would loop; docs/unit-coverage.md#sweep).
+# A change here or to the script takes effect at the next hand-over; cancel the run to apply it sooner.
+#
+# Secret SOURCE_TOKEN: the token the other workflows use (only read here). github.token starts the sweep and the next
+# watcher run.
+run-name: Watch for pull requests with no check
+on:
+  workflow_dispatch:
+permissions: { contents: read, actions: write }
+concurrency:
+  # one watcher at a time: the next run waits for this one, a third replaces a waiting one
+  group: watch
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+
+jobs:
+  watch:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    # the script hands over after 330 minutes; GitHub ends a job at 360
+    timeout-minutes: 345
+    steps:
+      # main's code, never a pull request's
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Start a sweep for each pull request head with no check
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
+        run: node scripts/ci-watch.mjs

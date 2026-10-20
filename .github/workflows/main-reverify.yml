@@ -1,0 +1,145 @@
+name: Main reverify
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# main-e2e.yml beside it; scripts/sync-release-repo.sh copies this file there as .github/workflows/main-reverify.yml.
+# While main is red, the sweep (scripts/main-reverify.mjs startReverify) starts it on main's newest commit, once that
+# is newer than the red one: it re-runs only the failing specs or unit test files the main-red issue names and posts
+# `<context>-reverify` there. The merge gate stops holding merges when it passes (docs/unit-coverage.md#targeted-re-verify);
+# the full paired cycle (main-validation.yml) still runs on main and decides.
+#   gh workflow run main-reverify.yml -R mopilot-ai/mopilot-code-release -f sha=<main commit> -f context=main-e2e \
+#     -f red=<red commit> -f files='tests/e2e/a.spec.ts tests/e2e/b.spec.ts'
+#
+# Secret SOURCE_TOKEN: the token main-e2e.yml uses (Contents read, Commit statuses read and write, Issues read and
+# write). The inputs carry commit ids and test paths only, as ci-cuj.yml's do; the logs show the list reporter.
+run-name: ${{ format('Re-run the failing {0} tests on main at {1}', inputs.context, inputs.sha) }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Full commit of main to re-run them on', required: true, type: string }
+      context: { description: 'The red run on main: main-e2e or main-unit-tests', required: true, type: string }
+      red: { description: 'Full commit the run failed on', required: true, type: string }
+      files: { description: 'Space-separated failing spec or test files', required: true, type: string }
+permissions: { contents: read }
+concurrency:
+  # one per commit and run; a second start for the same pair waits instead of cancelling one already testing
+  group: main-reverify-${{ inputs.context }}-${{ inputs.sha }}
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+
+jobs:
+  plan:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ok: ${{ steps.plan.outputs.ok }}
+      why: ${{ steps.plan.outputs.why }}
+      e2e: ${{ steps.plan.outputs.e2e }}
+      unit: ${{ steps.plan.outputs.unit }}
+      mac: ${{ steps.plan.outputs.mac }}
+    steps:
+      - name: Check the inputs
+        env: { SHA: '${{ inputs.sha }}', RED: '${{ inputs.red }}' }
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$RED" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected full commit ids"; exit 1; }
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: plan
+        env: { CONTEXT: '${{ inputs.context }}', FILES: '${{ inputs.files }}' }
+        run: node scripts/main-reverify.mjs plan
+
+  e2e:
+    needs: plan
+    if: needs.plan.outputs.e2e != ''
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      # word splitting of SPECS is the point: one argument per spec path, each checked by the plan
+      - env: { SPECS: '${{ needs.plan.outputs.e2e }}' }
+        run: npm run test:e2e -- $SPECS
+      - if: failure()
+        run: |
+          for f in test-results/e2e/*/error-context.md; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; cat "$f"; echo "::endgroup::"
+          done
+
+  unit:
+    needs: plan
+    if: needs.plan.outputs.unit != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      # npm test's flags on just these files, as main-unit-tests.yml's mac job runs its own
+      - env: { FILES: '${{ needs.plan.outputs.unit }}' }
+        run: npm run test:coverage -- --report-only $FILES
+
+  # the failing tests that need a real Mac, which the Linux job skips or checks only in part
+  mac:
+    needs: plan
+    if: needs.plan.outputs.mac != ''
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - env: { FILES: '${{ needs.plan.outputs.mac }}' }
+        run: npm run test:coverage -- --report-only $FILES
+
+  report:
+    needs: [plan, e2e, unit, mac]
+    # a cancelled or failed re-run still reports, so the sweep does not wait out its pending status
+    if: ${{ always() && vars.SOURCE_REPO != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          CONTEXT: ${{ inputs.context }}
+          SHA: ${{ inputs.sha }}
+          RED: ${{ inputs.red }}
+          FILES: ${{ inputs.files }}
+          OK: ${{ needs.plan.outputs.ok }}
+          WHY: ${{ needs.plan.outputs.why }}
+          RESULTS: ${{ needs.e2e.result }} ${{ needs.unit.result }} ${{ needs.mac.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/main-reverify.mjs report

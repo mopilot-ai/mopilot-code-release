@@ -231,7 +231,7 @@ jobs:
           APP="out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
           codesign --verify --deep --strict -vv "$APP"
           spctl -a -vvv -t exec "$APP"
-          xcrun stapler validate "$APP"
+          # the ticket is checked by release.mjs below, tried again while Apple's ticket service fails (scripts/notary.mjs)
           # --deep only follows nested bundles; check the Mach-Os in app.asar.unpacked (node-pty) one by one, and
           # ripgrep, which ships in Contents/Resources/ripgrep (scripts/fetch-vendor.mjs)
           UNPACKED="$APP/Contents/Resources/app.asar.unpacked"

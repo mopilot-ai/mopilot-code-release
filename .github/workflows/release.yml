@@ -89,6 +89,10 @@ jobs:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -105,9 +109,12 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; resolve it here with retries, since a dropped download ("fetch failed") would fail the first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
-      - run: npm run typecheck
+      - if: matrix.shard == 1
+        run: npm run typecheck
       - run: npm test
-      - run: npm ci && npm run typecheck && npm test
+        env: { UNIT_TEST_SHARD: '${{ matrix.shard }}/3' }
+      - if: matrix.shard == 1
+        run: npm ci && npm run typecheck && npm test
         working-directory: web
 
   unit-mac:

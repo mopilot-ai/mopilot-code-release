@@ -2,12 +2,9 @@ name: Main E2E
 # Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
 # main-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
 # .github/workflows/main-e2e.yml.
-# sweep.yml starts it on main's newest commit when that commit has no `main-e2e` status and the last run is 30 minutes old
-# (its schedule below is only a backup: GitHub fires schedules here rarely); it runs the
-# release's end-to-end suite on it (the e2e job of release.yml, split over four runners) and posts the result there.
-# A spec that a merged change left stale then shows within about 40 minutes, not at the next release; the merges since the
-# last green `main-e2e` commit are the ones to look at. scripts/merge-gate.mjs reports the newest result to whoever
-# merges next. The suite may run here because a GitHub Actions runner is nobody's desktop (scripts/release-suites.cjs).
+# main-validation.yml runs this suite and the unit suite against one captured SHA, normally every 15 minutes.
+# The four E2E shards share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
+# a failed suite can retry once without repeating a successful counterpart. This workflow also accepts manual dispatch.
 # Started by hand for one commit: gh workflow run main-e2e.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>
 #
 # Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read, Commit statuses read and write), plus Issues
@@ -15,11 +12,16 @@ name: Main E2E
 # here are public, as release.yml's are: no test traces are uploaded, and a failure's page snapshot goes to the log.
 run-name: ${{ inputs.sha && format('E2E for main at {0}', inputs.sha) || 'E2E for main' }}
 on:
+  workflow_call:
+    inputs:
+      sha: { required: true, type: string }
+      scope: { required: false, type: string, default: '' }
+      reuse_success: { required: false, type: boolean, default: true }
+    secrets:
+      SOURCE_TOKEN: { required: true }
   workflow_dispatch:
     inputs:
       sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
-  schedule:
-    - cron: '20 * * * *'
 permissions: { contents: read }
 concurrency:
   # one run at a time; a newer scheduled run waits instead of cancelling one already testing
@@ -33,12 +35,13 @@ jobs:
   pick:
     if: vars.SOURCE_REPO != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
     steps:
       - name: Pick main's commit and mark it pending
         id: pick
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}', REUSE_SUCCESS: '${{ inputs.reuse_success }}' }
         run: |
           set -euo pipefail
           sha=${SHA:-$(gh api "repos/$SOURCE_REPO/git/ref/heads/main" --jq .object.sha)}
@@ -54,9 +57,11 @@ jobs:
               echo "::error::Could not resolve the abbreviated commit SHA"; exit 1;
             fi
           fi
-          seen=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses" --jq "map(select(.context == \"$STATUS_CONTEXT\")) | length")
-          # a scheduled run leaves a tested (or testing) commit alone; a run started by hand tests it again (a flake)
-          if [ "$seen" != 0 ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then echo "main at $sha already has $STATUS_CONTEXT"; exit 0; fi
+          # A report/issue failure or a concurrent manual run must not erase a completed successful suite.
+          if [ "${REUSE_SUCCESS:-false}" = true ]; then
+            state=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses?per_page=100" --jq "[.[] | select(.context == \"$STATUS_CONTEXT\")][0].state")
+            if [ "$state" = success ]; then echo "Keeping completed $STATUS_CONTEXT at $sha"; exit 0; fi
+          fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the end-to-end suite' \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -73,6 +78,7 @@ jobs:
     needs: pick
     if: needs.pick.outputs.sha != ''
     runs-on: macos-15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +115,7 @@ jobs:
     needs: [pick, e2e]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # actions: read for the failed jobs' logs, which name the failing tests
     permissions: { contents: read, actions: read }
     steps:
@@ -145,6 +152,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SCOPE: ${{ inputs.scope }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.e2e.result }}
         run: |
@@ -152,7 +160,7 @@ jobs:
           if [ "$RESULT" = success ]; then state=success; else state=failure; fi
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then
-            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[] | select(.conclusion == "failure") | .id')
+            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion == \"failure\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | .id")
             # no failed job (one skipped or cancelled) is not an unreadable log
             [ -n "$ids" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
             for id in $ids; do

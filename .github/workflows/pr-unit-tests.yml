@@ -333,7 +333,7 @@ jobs:
   # every testing job's coverage as one report, and the changed-line check a single job would have made
   coverage:
     needs: [plan, unit, mac]
-    if: ${{ !cancelled() && needs.plan.outputs.split == 'true' && !contains(fromJSON('["failure", "cancelled"]'), needs.unit.result) && !contains(fromJSON('["failure", "cancelled"]'), needs.mac.result) }}
+    if: ${{ !cancelled() && needs.plan.outputs.split == 'true' && contains(fromJSON('["success", "skipped"]'), needs.unit.result) && contains(fromJSON('["success", "skipped"]'), needs.mac.result) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -75,11 +75,17 @@ jobs:
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
+  # npm test split over three Linux runners (node --test-shard through UNIT_TEST_SHARD), so the suite takes about a
+  # third of its ten minutes; the first shard also typechecks and runs the web app's tests
   test:
     needs: pick
     if: needs.pick.outputs.sha != ''
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,9 +103,12 @@ jobs:
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: npm run typecheck
+      - if: matrix.shard == 1
+        run: npm run typecheck
       - run: npm test
-      - run: npm ci && npm run typecheck && npm test
+        env: { UNIT_TEST_SHARD: '${{ matrix.shard }}/3' }
+      - if: matrix.shard == 1
+        run: npm ci && npm run typecheck && npm test
         working-directory: web
 
   # the tests that need a real Mac, which the Linux job skips or checks only in part

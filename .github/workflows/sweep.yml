@@ -4,7 +4,9 @@ name: Sweep
 # Whenever a pull request check, a run on main or a watcher run finishes, and when the watcher (watch.yml) sees a pull
 # request head with no check or an untested main, it runs scripts/ci-sweep.mjs from a checkout of main: it
 # starts the unit-tests check for open pull requests whose head has none, merges pull requests labeled
-# `merge-on-green` that the merge gate allows, starts one paired main validation (at most every 15 minutes), recovers stalled owners, reports freshness, and starts the watcher when none is queued or running. GitHub's schedule
+# `merge-on-green` that the merge gate allows, re-runs a red run's failing tests on a newer main commit (main-reverify.yml),
+# starts one paired main validation (at most every 15 minutes, at once while a red result sits behind main's head),
+# recovers stalled owners, reports freshness, and starts the watcher when none is queued or running. GitHub's schedule
 # events are best effort and were rarely fired here, so finishing runs and the watcher drive it; the schedule below is
 # only a backup, and starting it by hand runs one sweep.
 #
@@ -13,13 +15,13 @@ name: Sweep
 # builds. 0.3.33 failed that way after merge-on-green merged a release.yml change nobody then copied.
 #
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
-# Pull requests read, Issues read and write). github.token starts the other workflows here.
+# Pull requests read and write for the automatic revert of a red main, Issues read and write). github.token starts the other workflows here.
 # Secret WORKFLOW_SYNC_TOKEN: a fine-grained token with Contents and Workflows read and write on this repository only,
 # for the copy (github.token cannot change workflows). Without it the sweep warns instead of copying.
 run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}
 on:
   workflow_run:
-    workflows: ['PR unit tests', 'Main validation', 'Main unit tests', 'Main E2E', 'Watch']
+    workflows: ['PR unit tests', 'Main validation', 'Main unit tests', 'Main E2E', 'Main reverify', 'Watch']
     types: [completed]
   workflow_dispatch:
   schedule:

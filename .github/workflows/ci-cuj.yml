@@ -74,7 +74,9 @@ jobs:
         run: |
           set -euo pipefail
           parts=(); for p in results.json test-results/e2e; do [ -e "$p" ] && parts+=("$p"); done
-          tar -czf "$RUNNER_TEMP/bundle.tgz" ${parts[@]+"${parts[@]}"}
+          # the specs never ran (checkout or install failed): nothing to send, and the job has already failed
+          [ ${#parts[@]} -gt 0 ] || { echo "No results: the specs did not run"; exit 0; }
+          tar -czf "$RUNNER_TEMP/bundle.tgz" "${parts[@]}"
           mkdir -p "$RUNNER_TEMP/cuj"
           node -e '
             const c = require("node:crypto"), fs = require("node:fs"), dir = process.env.RUNNER_TEMP;

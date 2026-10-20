@@ -37,23 +37,26 @@ jobs:
         env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
         run: node scripts/main-validation-cycle.mjs pick
 
+  # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue and no revert
   unit:
     needs: pick
     if: needs.pick.outputs.unit == 'true'
     uses: ./.github/workflows/main-unit-tests.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit', reuse_success: true }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit', reuse_success: true, retry_follows: "${{ needs.pick.outputs.retryUnit == 'true' }}" }
     secrets: inherit
 
   e2e:
     needs: pick
     if: needs.pick.outputs.e2e == 'true'
     uses: ./.github/workflows/main-e2e.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e', reuse_success: true }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e', reuse_success: true, retry_follows: "${{ needs.pick.outputs.retryE2e == 'true' }}" }
     secrets: inherit
 
+  # Retry unless the first try posted success (its `state` output): a job that never got a runner leaves the suite
+  # `abandoned`, neither failure nor cancelled, and a report that never posted leaves no result at all.
   unit-retry:
     needs: [pick, unit]
-    if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && (needs.unit.result == 'failure' || needs.unit.result == 'cancelled') }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && needs.unit.outputs.state != 'success' }}
     uses: ./.github/workflows/main-unit-tests.yml
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true }
     secrets: inherit
@@ -61,7 +64,7 @@ jobs:
   # The shards that passed on the first try are not run again; if this job fails, the retry runs every shard.
   e2e-shards:
     needs: [pick, e2e]
-    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && (needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled') }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -77,7 +80,7 @@ jobs:
 
   e2e-retry:
     needs: [pick, e2e, e2e-shards]
-    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && (needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled') }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' }}
     uses: ./.github/workflows/main-e2e.yml
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
     secrets: inherit

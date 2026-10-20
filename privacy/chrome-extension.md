@@ -22,4 +22,4 @@ Effective: October 20, 2026
 
 **Changes.** If this policy changes, the new version is published at this address with a new effective date.
 
-**Contact.** duz3.reg@gmail.com
+**Contact.** admin@mopilot.ai

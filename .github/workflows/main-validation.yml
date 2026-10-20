@@ -58,11 +58,28 @@ jobs:
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true }
     secrets: inherit
 
-  e2e-retry:
+  # The shards that passed on the first try are not run again; if this job fails, the retry runs every shard.
+  e2e-shards:
     needs: [pick, e2e]
     if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && (needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.shards.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: shards
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: node scripts/main-e2e-retry-shards.mjs
+
+  e2e-retry:
+    needs: [pick, e2e, e2e-shards]
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && (needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled') }}
     uses: ./.github/workflows/main-e2e.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', reuse_success: true }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
     secrets: inherit
 
   finish:

@@ -58,7 +58,9 @@ jobs:
         run: |
           set -euo pipefail
           # a variable, not a process substitution, so a failed lookup stops the job (set -e)
-          info=$(gh api "repos/$SOURCE_REPO/pulls/$PR" --jq '"\(.head.sha) \(.base.ref) \(.state)"')
+          # main is the default branch, not the pull request's base: one stacked on another branch is still tested
+          # (and its status named) against main, which the merge gate reads (#1766)
+          info=$(gh api "repos/$SOURCE_REPO/pulls/$PR" --jq '"\(.head.sha) \(.base.repo.default_branch) \(.state)"')
           read -r sha base state <<< "$info"
           [ "$state" = open ] || { echo "::error::Pull request $PR is $state."; exit 1; }
           # main as it is now: the pull request is tested merged with it, and the status names it

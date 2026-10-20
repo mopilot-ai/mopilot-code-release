@@ -1,0 +1,79 @@
+name: Main validation
+# One immutable main SHA per cycle; finish healthy work and select the newest main only when the next cycle starts.
+run-name: ${{ inputs.sha && format('Validate main at {0}', inputs.sha) || 'Validate newest main' }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Optional main commit; otherwise select newest main when execution starts', required: false, type: string }
+  schedule:
+    - cron: '*/15 * * * *'
+permissions: { contents: read, actions: read }
+concurrency:
+  group: main-validation
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+
+jobs:
+  pick:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      control: ${{ steps.control.outputs.sha }}
+      unit: ${{ steps.pick.outputs.unit }}
+      e2e: ${{ steps.pick.outputs.e2e }}
+      retryUnit: ${{ steps.pick.outputs.retryUnit }}
+      retryE2e: ${{ steps.pick.outputs.retryE2e }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: control
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: pick
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
+        run: node scripts/main-validation-cycle.mjs pick
+
+  unit:
+    needs: pick
+    if: needs.pick.outputs.unit == 'true'
+    uses: ./.github/workflows/main-unit-tests.yml
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit', reuse_success: true }
+    secrets: inherit
+
+  e2e:
+    needs: pick
+    if: needs.pick.outputs.e2e == 'true'
+    uses: ./.github/workflows/main-e2e.yml
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e', reuse_success: true }
+    secrets: inherit
+
+  unit-retry:
+    needs: [pick, unit]
+    if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && (needs.unit.result == 'failure' || needs.unit.result == 'cancelled') }}
+    uses: ./.github/workflows/main-unit-tests.yml
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true }
+    secrets: inherit
+
+  e2e-retry:
+    needs: [pick, e2e]
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && (needs.e2e.result == 'failure' || needs.e2e.result == 'cancelled') }}
+    uses: ./.github/workflows/main-e2e.yml
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', reuse_success: true }
+    secrets: inherit
+
+  finish:
+    needs: [pick, unit, e2e, unit-retry, e2e-retry]
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}' }
+        run: node scripts/main-validation-cycle.mjs finish

@@ -19,10 +19,16 @@ on:
       sha: { required: true, type: string }
       scope: { required: false, type: string, default: '' }
       reuse_success: { required: false, type: boolean, default: true }
+      # the paired cycle retries this suite on this SHA if it fails: its failure is left to the retry's report
+      retry_follows: { required: false, type: boolean, default: false }
       # matrix exclusions, e.g. [{"shard": 1}], for shards that already passed on this SHA in the calling run
       skip_shards: { required: false, type: string, default: '[]' }
     secrets:
       SOURCE_TOKEN: { required: true }
+    # the result the report job posted ('' when none was posted), which the paired cycle's retry follows: a job that
+    # never got a runner leaves the suite `abandoned`, a result the caller cannot tell from the others
+    outputs:
+      state: { value: '${{ jobs.report.outputs.state }}' }
   workflow_dispatch:
     inputs:
       sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
@@ -123,8 +129,11 @@ jobs:
     timeout-minutes: 5
     # actions: read for the failed jobs' logs, which name the failing tests
     permissions: { contents: read, actions: read }
+    outputs:
+      state: ${{ steps.post.outputs.state }}
     steps:
       - name: Post the result on main's commit
+        id: post
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
@@ -143,6 +152,7 @@ jobs:
             --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+          echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "main at $SHA: $state"
       # one open issue per red run on main (label main-red), closed when it passes (scripts/main-red-issue.mjs); needs
       # SOURCE_TOKEN to have Issues read and write. A failure here leaves the status above in place. It names the likely
@@ -164,6 +174,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SCOPE: ${{ inputs.scope }}
+          RETRY_FOLLOWS: ${{ inputs.retry_follows }}
+          RETRIED: ${{ endsWith(inputs.scope, '-retry') }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.e2e.result }}
         run: |
@@ -172,8 +184,10 @@ jobs:
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then
             ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion == \"failure\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | .id")
-            # no failed job (one skipped or cancelled) is not an unreadable log
-            [ -n "$ids" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
+            # no failed job is not an unreadable log: name the ones that did not finish (a job that never got a runner is
+            # cancelled), so the issue does not read as a test failure, or say that none failed
+            [ -n "$ids" ] || gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion != null and .conclusion != \"success\" and .conclusion != \"skipped\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | \"✘ \" + .name + \" did not finish: \" + .conclusion" >> "$RUNNER_TEMP/failed.log" || true
+            [ -n "$ids" ] || [ -s "$RUNNER_TEMP/failed.log" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
             for id in $ids; do
               # not gh api, which refuses a log with terminal escape sequences (every issue before #842 named no test);
               # a log that cannot be read leaves the file empty and the issue says so

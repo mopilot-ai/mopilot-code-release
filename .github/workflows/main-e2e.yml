@@ -4,7 +4,9 @@ name: Main E2E
 # .github/workflows/main-e2e.yml.
 # main-validation.yml runs this suite and the unit suite against one captured SHA, normally every 15 minutes.
 # The four E2E shards share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
-# a failed suite can retry once without repeating a successful counterpart. This workflow also accepts manual dispatch.
+# a failed suite can retry once without repeating a successful counterpart, and the retry runs only the shards that
+# did not pass (skip_shards), so its success with the first try's passes covers every shard on that SHA.
+# This workflow also accepts manual dispatch, which runs every shard.
 # Started by hand for one commit: gh workflow run main-e2e.yml -R mopilot-ai/mopilot-code-release -f sha=<sha>
 #
 # Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read, Commit statuses read and write), plus Issues
@@ -17,6 +19,8 @@ on:
       sha: { required: true, type: string }
       scope: { required: false, type: string, default: '' }
       reuse_success: { required: false, type: boolean, default: true }
+      # matrix exclusions, e.g. [{"shard": 1}], for shards that already passed on this SHA in the calling run
+      skip_shards: { required: false, type: string, default: '[]' }
     secrets:
       SOURCE_TOKEN: { required: true }
   workflow_dispatch:
@@ -83,6 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        exclude: ${{ fromJSON(inputs.skip_shards || '[]') }}
     steps:
       - uses: actions/checkout@v4
         with:

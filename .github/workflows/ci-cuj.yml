@@ -1,0 +1,93 @@
+name: CUJ specs
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# main-e2e.yml beside it; scripts/sync-release-repo.sh copies this file there as .github/workflows/ci-cuj.yml.
+# Agents start it with scripts/ci-cuj.mjs, which picks a pushed commit of the source repository and the end-to-end
+# (fake-based CUJ/E2E) specs to run, splits them into shards, waits, and prints each spec's result. Each shard is a clean
+# macOS runner, so these runs never compete with the user's Mac or the virtual machines (docs/unit-coverage.md). The
+# suite may run here because a GitHub Actions runner is nobody's desktop (scripts/release-suites.cjs).
+#
+# Run logs and artifacts here are public, and the source repository is not: the inputs carry only a commit id, spec
+# paths and a public key, never a branch name; the logs show the list reporter's output, as main-e2e's do; and each
+# shard's results and traces are uploaded only encrypted to that public key, whose private half never leaves the
+# machine that started the run, and expire after a day.
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read is all this workflow needs).
+run-name: ${{ format('CUJ specs {0}', inputs.request) }}
+on:
+  workflow_dispatch:
+    inputs:
+      request: { description: 'Id scripts/ci-cuj.mjs finds this run by', required: true, type: string }
+      sha: { description: 'Full commit id of the source repository to test', required: true, type: string }
+      shards: { description: 'JSON array of {index, specs} shards, specs a space-separated list of spec paths', required: true, type: string }
+      public_key: { description: 'Base64 SPKI DER RSA public key the results are encrypted to', required: true, type: string }
+permissions: { contents: read }
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+
+jobs:
+  cuj:
+    if: vars.SOURCE_REPO != ''
+    # scripts/ci-cuj.mjs finds each shard's job and artifact by this index
+    name: shard ${{ matrix.index }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.shards) }}
+    steps:
+      - name: Check the inputs
+        env: { SHA: '${{ inputs.sha }}', SPECS: '${{ matrix.specs }}' }
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full commit id"; exit 1; }
+          for spec in $SPECS; do
+            [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._/-]+\.spec\.ts$ && "$spec" != *..* ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
+          done
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # Electron's download, kept between runs
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      # Electron downloads its binary on first use; a network blip there would fail the shard's first test
+      - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      - name: Run the specs
+        env: { SPECS: '${{ matrix.specs }}', PLAYWRIGHT_JSON_OUTPUT_FILE: results.json }
+        # word splitting of SPECS is the point: one argument per spec path, each checked above
+        run: npx playwright test -c tests/e2e --reporter=list,json $SPECS
+      # results.json and the traces, encrypted to the starter's public key: AES-256-GCM under a random key, which is
+      # itself encrypted with RSA-OAEP (SHA-256). Inline rather than a script of the source repository, so a branch
+      # from before scripts/ci-cuj.mjs can be tested too; scripts/ci-cuj.mjs (decryptBundle) reverses it.
+      - name: Encrypt the results
+        if: ${{ !cancelled() }}
+        env: { PUBLIC_KEY: '${{ inputs.public_key }}' }
+        run: |
+          set -euo pipefail
+          parts=(); for p in results.json test-results/e2e; do [ -e "$p" ] && parts+=("$p"); done
+          tar -czf "$RUNNER_TEMP/bundle.tgz" ${parts[@]+"${parts[@]}"}
+          mkdir -p "$RUNNER_TEMP/cuj"
+          node -e '
+            const c = require("node:crypto"), fs = require("node:fs"), dir = process.env.RUNNER_TEMP;
+            const pub = c.createPublicKey({ key: Buffer.from(process.env.PUBLIC_KEY, "base64"), format: "der", type: "spki" });
+            const key = c.randomBytes(32), iv = c.randomBytes(12), aes = c.createCipheriv("aes-256-gcm", key, iv);
+            const body = Buffer.concat([aes.update(fs.readFileSync(dir + "/bundle.tgz")), aes.final()]);
+            const sealed = c.publicEncrypt({ key: pub, padding: c.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, key);
+            fs.writeFileSync(dir + "/cuj/key.enc", sealed);
+            fs.writeFileSync(dir + "/cuj/bundle.enc", Buffer.concat([iv, aes.getAuthTag(), body]));
+          '
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuj-${{ matrix.index }}
+          path: ${{ runner.temp }}/cuj
+          retention-days: 1

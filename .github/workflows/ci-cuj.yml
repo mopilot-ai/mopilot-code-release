@@ -61,10 +61,13 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      # A failing spec does not fail the job: scripts/ci-cuj.mjs judges each spec from results.json, and a failed run
+      # here emails whoever started it, once per agent iteration. A shard that brings no results back still fails
+      # there, and setup steps (checkout, install, Electron) still fail the job.
       - name: Run the specs
         env: { SPECS: '${{ matrix.specs }}', PLAYWRIGHT_JSON_OUTPUT_FILE: results.json }
         # word splitting of SPECS is the point: one argument per spec path, each checked above
-        run: npx playwright test -c tests/e2e --reporter=list,json $SPECS
+        run: npx playwright test -c tests/e2e --reporter=list,json $SPECS || echo "::warning::Some specs failed; scripts/ci-cuj.mjs reports which"
       # results.json and the traces, encrypted to the starter's public key: AES-256-GCM under a random key, which is
       # itself encrypted with RSA-OAEP (SHA-256). Inline rather than a script of the source repository, so a branch
       # from before scripts/ci-cuj.mjs can be tested too; scripts/ci-cuj.mjs (decryptBundle) reverses it.

@@ -21,7 +21,7 @@ name: Sweep
 run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}
 on:
   workflow_run:
-    workflows: ['PR unit tests', 'Main validation', 'Main unit tests', 'Main E2E', 'Main reverify', 'Watch']
+    workflows: ['PR unit tests', 'Main validation', 'Main unit tests', 'Main E2E', 'Main reverify', 'Watch', 'Release']
     types: [completed]
   workflow_dispatch:
   schedule:
@@ -62,6 +62,17 @@ jobs:
           bash scripts/sync-release-repo.sh origin/main 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"
       - if: ${{ !cancelled() && env.HAS_SYNC_TOKEN != 'true' }}
         run: echo "::warning::Set the secret WORKFLOW_SYNC_TOKEN so the sweep copies main's workflows here; until then run scripts/sync-release-repo.sh after merging a workflow change."
+      # After workflow sync, so the selected verified commit must match the workflow that will actually build it.
+      # The sweep's single owner serializes dispatch reservations; Release finishing wakes it to pick up newer main.
+      - name: Release verified main to dogfood
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          RELEASE_GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+          DOGFOOD_RELEASES: ${{ vars.DOGFOOD_RELEASES }}
+        run: |
+          set -o pipefail
+          node scripts/dogfood-release.mjs 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"
       # A sweep posts no commit status, so a failing one is reported here: two failed sweeps in a row open the main-red
       # issue "Main is red: sweep", and the next sweep that passes closes it (scripts/sweep-red-issue.mjs). A sweep that
       # crashed on a missing package stopped every check and merge for 7.5 hours while main read green. Like the sweep,

@@ -3,7 +3,10 @@ name: Main E2E
 # main-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
 # .github/workflows/main-e2e.yml.
 # main-validation.yml runs this suite and the unit suite against one captured SHA, normally every 15 minutes.
-# The four E2E shards share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
+# Job `scope` (scripts/main-e2e-scope.mjs) picks what to test: only the specs the commits since main's last green run reach
+# (the selection the PR check uses), or the whole suite whenever that cannot be trusted and once a night
+# (docs/unit-coverage.md#scoped-e2e-and-the-nightly-full-run). A scoped result says so in its description.
+# The E2E shards (up to four) share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
 # a failed suite can retry once without repeating a successful counterpart, and the retry runs only the shards that
 # did not pass (skip_shards), so its success with the first try's passes covers every shard on that SHA.
 # This workflow also accepts manual dispatch, which runs every shard.
@@ -18,6 +21,11 @@ on:
     inputs:
       sha: { required: true, type: string }
       scope: { required: false, type: string, default: '' }
+      # the whole suite, whatever the commits since the last green run reach (the night's run, and the retry of one)
+      full: { required: false, type: boolean, default: false }
+      # the first try's choice (its `chosen` output): the retry tests the same specs on the same shards, which
+      # skip_shards counts by number, however main's statuses have moved since
+      first_try: { required: false, type: string, default: '' }
       reuse_success: { required: false, type: boolean, default: true }
       # the paired cycle retries this suite on this SHA if it fails: its failure is left to the retry's report
       retry_follows: { required: false, type: boolean, default: false }
@@ -29,9 +37,11 @@ on:
     # never got a runner leaves the suite `abandoned`, a result the caller cannot tell from the others
     outputs:
       state: { value: '${{ jobs.report.outputs.state }}' }
+      chosen: { value: '${{ toJSON(jobs.scope.outputs) }}' }
   workflow_dispatch:
     inputs:
       sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
+      full: { description: 'Every spec (default); false runs only the specs the commits since the last green run reach', required: false, type: boolean, default: true }
 permissions: { contents: read }
 concurrency:
   # one run at a time; a newer scheduled run waits instead of cancelling one already testing
@@ -51,7 +61,7 @@ jobs:
     steps:
       - name: Pick main's commit and mark it pending
         id: pick
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}', REUSE_SUCCESS: '${{ inputs.reuse_success }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}', REUSE_SUCCESS: '${{ inputs.reuse_success && !inputs.full }}', FULL: '${{ inputs.full }}' }
         run: |
           set -euo pipefail
           sha=${SHA:-$(gh api "repos/$SOURCE_REPO/git/ref/heads/main" --jq .object.sha)}
@@ -68,10 +78,13 @@ jobs:
             fi
           fi
           # A report/issue failure or a concurrent manual run must not erase a completed successful suite.
-          if [ "${REUSE_SUCCESS:-false}" = true ]; then
+          if [ "${REUSE_SUCCESS:-false}" = true ] || [ "${FULL:-}" = true ]; then
             state=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses?per_page=100" --jq "[.[] | select(.context == \"$STATUS_CONTEXT\")][0].state")
-            if [ "$state" = success ]; then echo "Keeping completed $STATUS_CONTEXT at $sha"; exit 0; fi
           fi
+          if [ "${REUSE_SUCCESS:-false}" = true ] && [ "${state:-}" = success ]; then echo "Keeping completed $STATUS_CONTEXT at $sha"; exit 0; fi
+          # A full run on a commit that already passed leaves the pass in place until its own result replaces it: a pending
+          # status would make main unverified for the length of the run, and the freshness alert would open every night.
+          if [ "${FULL:-}" = true ] && [ "${state:-}" = success ]; then echo "sha=$sha" >> "$GITHUB_OUTPUT"; exit 0; fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the end-to-end suite' \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -84,15 +97,63 @@ jobs:
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-  e2e:
+  # which specs to test: scripts/main-e2e-scope.mjs. It runs the whole suite on any doubt, and a job that leaves no
+  # answer (the checkout is of a commit before the script, npm ci fails) counts as one: its outputs are empty, which
+  # the jobs below read as a full run
+  scope:
     needs: pick
     if: needs.pick.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    outputs:
+      mode: ${{ steps.reuse.outputs.mode || steps.scope.outputs.mode }}
+      count: ${{ steps.reuse.outputs.count || steps.scope.outputs.count }}
+      shards: ${{ steps.reuse.outputs.shards || steps.scope.outputs.shards }}
+      specs: ${{ steps.reuse.outputs.specs || steps.scope.outputs.specs }}
+      suffix: ${{ steps.reuse.outputs.suffix || steps.scope.outputs.suffix }}
+    steps:
+      # a retry takes its first try's choice as it is; without one (or one that chose nothing) it works the choice out
+      - id: reuse
+        env: { FIRST_TRY: '${{ inputs.first_try }}' }
+        run: |
+          set -euo pipefail
+          mode=$(printf '%s' "${FIRST_TRY:-}" | jq -r '.mode // empty' 2>/dev/null || true)
+          [ -n "$mode" ] || exit 0
+          for key in mode count shards specs suffix; do
+            echo "$key=$(printf '%s' "$FIRST_TRY" | jq -r --arg key "$key" '.[$key] // ""')" >> "$GITHUB_OUTPUT"
+          done
+          echo "The first try's choice stands: $mode"
+      - if: steps.reuse.outputs.mode == ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the history, to find the last green run's commit and what changed since
+          fetch-depth: 0
+          persist-credentials: false
+      - if: steps.reuse.outputs.mode == ''
+        uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # the selection reads sources with the parser in node_modules, and needs no Electron or install script
+      - if: steps.reuse.outputs.mode == ''
+        run: npm ci --ignore-scripts
+      - id: scope
+        if: steps.reuse.outputs.mode == ''
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}', FULL: '${{ inputs.full }}' }
+        run: node scripts/main-e2e-scope.mjs
+
+  e2e:
+    needs: [pick, scope]
+    # no spec reached: nothing to run, and the report posts the pass
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.scope.outputs.mode != 'none' }}
     runs-on: macos-15
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(needs.scope.outputs.shards || '[1,2,3,4]') }}
         exclude: ${{ fromJSON(inputs.skip_shards || '[]') }}
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +174,24 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
-      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+      # the whole suite in four shards, or the specs the scope picked in as many as it asked for (strategy.job-total would
+      # shrink with the shards a retry skips)
+      - name: Run the specs
+        env:
+          MODE: ${{ needs.scope.outputs.mode }}
+          SPECS: ${{ needs.scope.outputs.specs }}
+          SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.count || 4 }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = scoped ]; then
+            for spec in $SPECS; do
+              [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
+            done
+            # word splitting of SPECS is the point: one argument per spec path, each checked above
+            npx playwright test -c tests/e2e --shard="$SHARD" $SPECS
+          else
+            npm run test:e2e -- --shard="$SHARD"
+          fi
       # what the page held when a test failed, so a failure only the runner shows can be read from the log
       - if: failure()
         run: |
@@ -123,7 +201,7 @@ jobs:
           done
 
   report:
-    needs: [pick, e2e]
+    needs: [pick, scope, e2e]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -138,10 +216,15 @@ jobs:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.e2e.result }}
+          MODE: ${{ needs.scope.outputs.mode }}
+          SUFFIX: ${{ needs.scope.outputs.suffix }}
         run: |
           set -euo pipefail
-          if [ "$RESULT" = success ]; then state=success; description='The end-to-end suite passed'
-          else state=failure; description='The end-to-end suite failed; see the failing shards'; fi
+          # no spec reached: the shards were skipped, which is a pass
+          if [ "${MODE:-}" = none ] && [ "$RESULT" = skipped ]; then RESULT=success; fi
+          # a scoped result says so ("(scoped: …)"): only a full pass vouches for the specs it did not run
+          if [ "$RESULT" = success ]; then state=success; description="The end-to-end suite passed${SUFFIX:-}"
+          else state=failure; description="The end-to-end suite failed${SUFFIX:-}; see the failing shards"; fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -178,8 +261,10 @@ jobs:
           RETRIED: ${{ endsWith(inputs.scope, '-retry') }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.e2e.result }}
+          MODE: ${{ needs.scope.outputs.mode }}
         run: |
           set -euo pipefail
+          if [ "${MODE:-}" = none ] && [ "$RESULT" = skipped ]; then RESULT=success; fi
           if [ "$RESULT" = success ]; then state=success; else state=failure; fi
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then

@@ -84,6 +84,7 @@ jobs:
           RELEASE_GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ github.repository }}
           DOGFOOD_RELEASES: ${{ vars.DOGFOOD_RELEASES }}
+          DOGFOOD_MIN_INTERVAL_MINUTES: ${{ vars.DOGFOOD_MIN_INTERVAL_MINUTES }}
         run: |
           set -o pipefail
           node scripts/dogfood-release.mjs 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"

@@ -2,7 +2,7 @@ name: Watch
 # Runs in the public release repository (mopilot-ai/mopilot-code-release), like sweep.yml beside it;
 # scripts/sync-release-repo.sh copies this file there as .github/workflows/watch.yml.
 # It runs scripts/ci-watch.mjs from a checkout of main: every minute it reads the open pull requests and main's newest
-# commit, and starts sweep.yml when a pull request head has no unit-tests check or main has no run on main. The sweep
+# commit, and starts sweep.yml when a pull request head has no unit-tests check (scripts/ci-sweep.mjs wantsCheck: labeled merge-on-green, or quiet for 20 minutes) or main has no run on main. The sweep
 # otherwise runs only when a run finishes, and GitHub rarely fires its schedule, so on a quiet main a new pull request
 # (#1644, the fix for a red main) waited 40 minutes with no check. One run holds one of the account's Linux runners for
 # 5.5 hours, then starts the next run and ends. Every watcher run that ends starts a sweep (sweep.yml), and every sweep
@@ -36,5 +36,5 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Start a sweep for each pull request head with no check
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
         run: node scripts/ci-watch.mjs

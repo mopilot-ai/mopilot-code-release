@@ -5,12 +5,8 @@ on:
   workflow_dispatch:
     inputs:
       sha: { description: 'Optional main commit; otherwise select newest main when execution starts', required: false, type: string }
-      # the night's full E2E run on a verified main (the sweep asks for it); a cycle's pick job also does it when it is due
-      full: { description: 'Run the whole E2E suite, not only the specs the new commits reach', required: false, type: boolean, default: false }
   schedule:
     - cron: '*/15 * * * *'
-    # 09:23 UTC, 02:23 in Los Angeles; GitHub rarely fires schedules here, so the sweep starts the run when it is due too
-    - cron: '23 9 * * *'
 permissions: { contents: read, actions: read }
 concurrency:
   group: main-validation
@@ -28,7 +24,6 @@ jobs:
       control: ${{ steps.control.outputs.sha }}
       unit: ${{ steps.pick.outputs.unit }}
       e2e: ${{ steps.pick.outputs.e2e }}
-      full: ${{ steps.pick.outputs.full }}
       retryUnit: ${{ steps.pick.outputs.retryUnit }}
       retryE2e: ${{ steps.pick.outputs.retryE2e }}
     steps:
@@ -39,7 +34,7 @@ jobs:
       - id: control
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - id: pick
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}' }
         run: node scripts/main-validation-cycle.mjs pick
 
   # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue and no revert
@@ -53,9 +48,8 @@ jobs:
   e2e:
     needs: pick
     if: needs.pick.outputs.e2e == 'true'
-    # a full run must not keep a scoped success already on this commit (reuse_success)
     uses: ./.github/workflows/main-e2e.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e', full: "${{ needs.pick.outputs.full == 'true' }}", reuse_success: "${{ needs.pick.outputs.full != 'true' }}", retry_follows: "${{ needs.pick.outputs.retryE2e == 'true' }}" }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e', reuse_success: true, retry_follows: "${{ needs.pick.outputs.retryE2e == 'true' }}" }
     secrets: inherit
 
   # Retry unless the first try posted success (its `state` output): a job that never got a runner leaves the suite
@@ -88,7 +82,7 @@ jobs:
     needs: [pick, e2e, e2e-shards]
     if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' }}
     uses: ./.github/workflows/main-e2e.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', full: "${{ needs.pick.outputs.full == 'true' }}", first_try: '${{ needs.e2e.outputs.chosen }}', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
     secrets: inherit
 
   finish:

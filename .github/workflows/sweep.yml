@@ -3,7 +3,7 @@ name: Sweep
 # scripts/sync-release-repo.sh copies this file there as .github/workflows/sweep.yml.
 # Whenever a pull request check, a run on main or a watcher run finishes, and when the watcher (watch.yml) sees a pull
 # request head with no check or an untested main, it runs scripts/ci-sweep.mjs from a checkout of main: it
-# starts the unit-tests check for open pull requests whose head has none, merges pull requests labeled
+# starts the unit-tests check for open pull requests whose head has none (an unlabeled one once quiet, wantsCheck), merges pull requests labeled
 # `merge-on-green` that the merge gate allows, re-runs a red run's failing tests on a newer main commit (main-reverify.yml),
 # starts one paired main validation (at most every 15 minutes, at once while a red result sits behind main's head),
 # recovers stalled owners, reports freshness, and starts the watcher when none is queued or running. GitHub's schedule
@@ -56,7 +56,7 @@ jobs:
         run: node scripts/sweep-state.mjs "$RUNNER_TEMP/sweep-state"
       - name: Start missing checks, merge on green, start the runs on main when due, keep a watcher running
         env:
-          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json' }
+          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
         # its output also goes to the log the issue below quotes
         run: |
           set -o pipefail

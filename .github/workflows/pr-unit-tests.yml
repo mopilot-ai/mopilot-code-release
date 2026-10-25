@@ -57,6 +57,7 @@ jobs:
       digest: ${{ steps.split.outputs.digest }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
       e2e_shards: ${{ steps.e2e.outputs.e2e_shards }}
+      web: ${{ steps.split.outputs.web }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -92,8 +93,9 @@ jobs:
           # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ steps.pr.outputs.base_sha }}'
@@ -105,17 +107,33 @@ jobs:
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
           node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
-      # the related-test search needs no Electron or install script, only the modules it reads with
-      - run: npm ci --ignore-scripts
+      # the related-test search needs no Electron or install script, only the modules it reads with: it restores what the
+      # test jobs saved, and on a miss installs without scripts and saves nothing. Why the cache is keyed as it is: the next
+      # job that restores node_modules (below)
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --ignore-scripts
       - id: split
         run: node scripts/test-shards.mjs plan --changed=${{ steps.pr.outputs.base_sha }}
       # the fake-based E2E specs the change can break (docs/unit-coverage.md#e2e-specs), for job `e2e`
       - id: e2e
         run: node scripts/e2e-select.mjs --changed=${{ steps.pr.outputs.base_sha }}
 
+  # the static checks, one runner each: Biome and the lint ratchet (which lints the whole tree too) take about 45 seconds
+  # apiece and slow each other down on one runner's cores, the type checks are shorter. Each job is its own check in
+  # the status (the report job counts the matrix as a whole)
   static:
     needs: plan
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [biome, ratchet, types]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,10 +143,12 @@ jobs:
           # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       # the pre-commit hook's header check: every source file has a one-line header comment (it needs only Node)
-      - run: npm run module-map -- --check
+      - if: matrix.check == 'biome'
+        run: npm run module-map -- --check
       # what merging would produce. main's scripts/merge-generated.mjs merges (the pull request may predate it) and
       # drops the generated files main no longer commits (docs/module-map.md), so a conflict only there is none, as
       # merge-on-green's result has it. Any other conflict fails the check (merge main into the branch and push)
@@ -143,26 +163,45 @@ jobs:
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
           node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
-      # Electron's download, kept between runs
-      - uses: actions/cache@v4
+      # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
+      # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
+      # before any test runs, so a test cannot change what the next run restores
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ~/Library/Caches/electron
-            ~/.cache/electron
-          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm ci
-        working-directory: web
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      # web/ is for its type check only
+      - id: webdeps
+        if: matrix.check == 'types'
+        uses: actions/cache/restore@v4
+        with:
+          path: web/node_modules
+          key: web-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.web }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }}
+      - if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
+      - if: steps.webdeps.outcome == 'success' && steps.webdeps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: web/node_modules, key: '${{ steps.webdeps.outputs.cache-primary-key }}' }
       # the pre-commit hook's checks (scripts/precommit.mjs; tests/prUnitTestsWorkflow.test.ts keeps the two in step)
-      - run: npx biome check --diagnostic-level=error .
-      - run: npm run typecheck
-      - run: npm run typecheck
+      - if: matrix.check == 'biome'
+        run: npx biome check --diagnostic-level=error .
+      - if: matrix.check == 'types'
+        run: npm run typecheck
+      - if: matrix.check == 'types'
+        run: npm run typecheck
         working-directory: web
       # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention/README.md);
       # a pull request branched before the ratchet existed has nothing to run
-      - run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ needs.plan.outputs.base_sha }}; fi
-      # Same staged-content policy as pre-commit, applied to the merged tree against current main; no extra job.
-      - run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
+      - if: matrix.check == 'ratchet'
+        run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ needs.plan.outputs.base_sha }}; fi
+      # Same staged-content policy as pre-commit, applied to the merged tree against current main
+      - if: matrix.check == 'ratchet'
+        run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
 
   # the related tests that run anywhere, round-robin across the planned Linux shards
   unit:
@@ -181,8 +220,9 @@ jobs:
           # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
@@ -201,9 +241,29 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm ci
-        working-directory: web
+      # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
+      # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
+      # before any test runs, so a test cannot change what the next run restores
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      - id: webdeps
+        if: needs.plan.outputs.web == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: web/node_modules
+          key: web-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.web }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }}
+      - if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
+      - if: steps.webdeps.outcome == 'success' && steps.webdeps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: web/node_modules, key: '${{ steps.webdeps.outputs.cache-primary-key }}' }
       # this shard's part of the plan (refused when this checkout finds other tests); with one shard and no Mac, the job
       # also checks the change's coverage, as `npm run test:coverage -- --changed=<main> --related` does; otherwise it
       # packs the raw coverage for job `coverage`
@@ -237,8 +297,9 @@ jobs:
           # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
@@ -257,9 +318,29 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm ci
-        working-directory: web
+      # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
+      # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
+      # before any test runs, so a test cannot change what the next run restores
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      - id: webdeps
+        if: needs.plan.outputs.web == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: web/node_modules
+          key: web-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.web }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }}
+      - if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
+      - if: steps.webdeps.outcome == 'success' && steps.webdeps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: web/node_modules, key: '${{ steps.webdeps.outputs.cache-primary-key }}' }
       - run: |
           files=$(node scripts/test-shards.mjs files --changed=${{ needs.plan.outputs.base_sha }} --plan=${{ needs.plan.outputs.digest }} --mac)
           npm run test:coverage -- --raw-out coverage/raw $files
@@ -292,8 +373,9 @@ jobs:
           # the whole history, so main can be merged in
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
@@ -312,7 +394,20 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
+      # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
+      # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
+      # before any test runs, so a test cannot change what the next run restores
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip
+      - if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
       # one retry, so a timing flake does not fail the pull request (main-e2e still runs them without)
@@ -347,8 +442,9 @@ jobs:
           # the whole history, so the change is measured from its merge base with the target branch
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - id: node
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
@@ -360,8 +456,18 @@ jobs:
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
           node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
-      # c8 and the coverage check need no Electron
-      - run: npm ci --ignore-scripts
+      # c8 and the coverage check need no Electron or install script
+      # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
+      # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
+      # before any test runs, so a test cannot change what the next run restores
+      - id: keys
+        run: node scripts/ci-install.mjs keys >> "$GITHUB_OUTPUT"
+      - id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           pattern: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-*

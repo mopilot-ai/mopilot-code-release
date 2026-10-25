@@ -178,9 +178,8 @@ jobs:
           echo "main at $SHA: $state"
       # one open issue per red run on main (label main-red), closed when it passes (scripts/main-red-issue.mjs); needs
       # SOURCE_TOKEN to have Issues read and write. A failure here leaves the status above in place. It names the likely
-      # cause from main's history and the import graph of this checkout, and pushes and opens its revert from it
-      # (docs/unit-coverage.md#revert-first), which needs Contents and Pull requests read and write; without them the
-      # issue keeps the revert command instead.
+      # cause from main's history and the import graph of this checkout (docs/unit-coverage.md#fix-forward); it pushes
+      # nothing and opens no pull request.
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
@@ -197,7 +196,6 @@ jobs:
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SCOPE: ${{ inputs.scope }}
           RETRY_FOLLOWS: ${{ inputs.retry_follows }}
-          RETRIED: ${{ endsWith(inputs.scope, '-retry') }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
           MAC_RESULT: ${{ needs.mac.result }}

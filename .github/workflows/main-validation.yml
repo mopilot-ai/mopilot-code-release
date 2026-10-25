@@ -38,8 +38,9 @@ jobs:
         with: { node-version: 24 }
       - id: control
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # RELEASE_GH_TOKEN reads this repository's pull request checks: a scheduled cycle yields to their waiting macOS jobs
       - id: pick
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
         run: node scripts/main-validation-cycle.mjs pick
 
   # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue and no revert

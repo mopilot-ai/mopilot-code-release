@@ -17,8 +17,9 @@ name: PR unit tests
 # Linux shards, job `mac` runs only the related tests that need a real Mac (scripts/mac-only-tests.mjs), and when more
 # than one job tested, job `coverage` merges their raw coverage into one report and checks the changed lines
 # (docs/unit-coverage.md#runners). A change one Linux shard can test checks its coverage in that shard. Job `plan` also
-# picks the fake-based E2E specs the change can break (scripts/e2e-select.mjs), and job `e2e` runs them on up to three
-# macOS runners (docs/unit-coverage.md#e2e-specs); the status counts them too.
+# picks the fake-based E2E specs the change can break (scripts/e2e-select.mjs), and job `e2e` runs them on up to six
+# Linux runners under xvfb, and the few that need a Mac on one macOS runner (docs/unit-coverage.md#e2e-specs); the
+# status counts them too.
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -54,7 +55,8 @@ jobs:
       split: ${{ steps.split.outputs.split }}
       digest: ${{ steps.split.outputs.digest }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
-      e2e_shards: ${{ steps.e2e.outputs.e2e_shards }}
+      e2e_mac_specs: ${{ steps.e2e.outputs.e2e_mac_specs }}
+      e2e_matrix: ${{ steps.e2e.outputs.e2e_matrix }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -269,17 +271,18 @@ jobs:
           overwrite: true
           retention-days: 1
 
-  # the fake-based E2E specs the change can break, on up to three macOS runners (the account's five are shared with
+  # the fake-based E2E specs the change can break, on Linux under xvfb, where the account runs about twenty jobs at once
+  # with no queue, and the ones that skip a test off macOS on one macOS runner (the account's five are shared with
   # main-e2e), so a spec still asserting copy or a selector the change removed fails here rather than on main
   e2e:
     needs: plan
-    if: needs.plan.outputs.e2e_specs != ''
-    runs-on: macos-15
+    if: needs.plan.outputs.e2e_matrix != '[]' && needs.plan.outputs.e2e_matrix != ''
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.e2e_shards) }}
+        include: ${{ fromJSON(needs.plan.outputs.e2e_matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -312,16 +315,25 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      # Ubuntu's AppArmor keeps Chromium's sandbox from the unprivileged user namespaces it needs, and Electron does not
+      # start without it
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # one retry, so a timing flake does not fail the pull request (main-e2e still runs them without)
       - name: Run the specs
-        env: { SPECS: '${{ needs.plan.outputs.e2e_specs }}', SHARD: '${{ matrix.shard }}/${{ strategy.job-total }}' }
+        env:
+          SPECS: "${{ runner.os == 'macOS' && needs.plan.outputs.e2e_mac_specs || needs.plan.outputs.e2e_specs }}"
+          SHARD: '${{ matrix.shard }}'
         run: |
           set -euo pipefail
           for spec in $SPECS; do
             [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
           done
+          [[ "$SHARD" =~ ^[0-9]+/[0-9]+$ ]] || { echo "::error::Not a shard: $SHARD"; exit 1; }
+          # Linux runners have no display: xvfb-run gives the run a virtual one
+          if [ "$RUNNER_OS" = Linux ]; then npx=(xvfb-run -a npx); else npx=(npx); fi
           # word splitting of SPECS is the point: one argument per spec path, each checked above
-          npx playwright test -c tests/e2e --retries=1 --shard="$SHARD" $SPECS
+          "${npx[@]}" playwright test -c tests/e2e --retries=1 --shard="$SHARD" $SPECS
       # what the page held when a test failed, so a failure only the runner shows can be read from the log
       - if: failure()
         run: |
@@ -384,7 +396,7 @@ jobs:
           MAC_RESULT: ${{ needs.mac.result }}
           SPLIT: ${{ needs.plan.outputs.split }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
-          E2E_SPECS: ${{ needs.plan.outputs.e2e_specs }}
+          E2E_SPECS: ${{ needs.plan.outputs.e2e_specs }}${{ needs.plan.outputs.e2e_mac_specs }}
           E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           set -euo pipefail

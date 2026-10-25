@@ -56,7 +56,7 @@ jobs:
         run: node scripts/sweep-state.mjs "$RUNNER_TEMP/sweep-state"
       - name: Start missing checks, merge on green, start the runs on main when due, keep a watcher running
         env:
-          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
+          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}' }
         # its output also goes to the log the issue below quotes
         run: |
           set -o pipefail

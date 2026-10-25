@@ -20,7 +20,9 @@ name: PR unit tests
 # picks the fake-based E2E specs the change can break (scripts/e2e-select.mjs), and job `e2e` runs them on up to three
 # macOS runners (docs/unit-coverage.md#e2e-specs). They are advisory: `unit-tests` does not wait for them, and job
 # `e2e-report` posts their result as its own status, `e2e-specs`, which no merge waits for; main-e2e is the net after
-# the merge, and a spec it finds stale is fixed forward.
+# the merge, and a spec it finds stale is fixed forward. A retest of the same head after main moved runs only the
+# specs main's newer commits reach: the rest carry from the earlier run that passed them, by the record its job
+# `e2e-report` left (scripts/e2e-carry.mjs, docs/unit-coverage.md#e2e-carry).
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -48,6 +50,8 @@ jobs:
   plan:
     if: vars.SOURCE_REPO != ''
     runs-on: ubuntu-latest
+    # actions: read for the records earlier runs of this check left (scripts/e2e-records.mjs)
+    permissions: { contents: read, actions: read }
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
@@ -57,6 +61,9 @@ jobs:
       digest: ${{ steps.split.outputs.digest }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
       e2e_shards: ${{ steps.e2e.outputs.e2e_shards }}
+      e2e_run: ${{ steps.carry.outputs.e2e_run }}
+      e2e_run_shards: ${{ steps.carry.outputs.e2e_run_shards }}
+      e2e_carried: ${{ steps.carry.outputs.e2e_carried }}
       web: ${{ steps.split.outputs.web }}
     steps:
       - name: Find the pull request's head and mark it pending
@@ -96,6 +103,24 @@ jobs:
       - id: node
         uses: actions/setup-node@v4
         with: { node-version: 24 }
+      # the E2E specs earlier runs of this check passed on this head (scripts/e2e-records.mjs, main's copy, which imports
+      # nothing), read before the pull request's code is merged in, so the token that reads them never meets that code;
+      # a main from before the script reads none
+      - name: Read the E2E specs earlier runs passed on this head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # the head's own results: which main commit each run tested, and which runs failed their E2E jobs
+          SOURCE_GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          PR: ${{ inputs.pr }}
+          HEAD: ${{ steps.pr.outputs.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          echo '[]' > "$RUNNER_TEMP/e2e-records.json"
+          if git show "$BASE_SHA:scripts/e2e-records.mjs" > "$RUNNER_TEMP/e2e-records.mjs" 2> /dev/null; then
+            OUT="$RUNNER_TEMP/e2e-records.json" node "$RUNNER_TEMP/e2e-records.mjs"
+          fi
       - name: Merge main into the pull request
         env:
           BASE_SHA: '${{ steps.pr.outputs.base_sha }}'
@@ -123,6 +148,15 @@ jobs:
       # the fake-based E2E specs the change can break (docs/unit-coverage.md#e2e-specs), for job `e2e`
       - id: e2e
         run: node scripts/e2e-select.mjs --changed=${{ steps.pr.outputs.base_sha }}
+      # of those, the ones an earlier run passed on this head and main's newer commits reach none of; job e2e runs the rest
+      - id: carry
+        env:
+          PR: ${{ inputs.pr }}
+          HEAD: ${{ steps.pr.outputs.sha }}
+          MAIN: ${{ steps.pr.outputs.base_sha }}
+          SPECS: ${{ steps.e2e.outputs.e2e_specs }}
+          RECORDS: ${{ runner.temp }}/e2e-records.json
+        run: node scripts/e2e-carry.mjs
 
   # the static checks, one runner each: Biome and the lint ratchet (which lints the whole tree too) take about 45 seconds
   # apiece and slow each other down on one runner's cores, the type checks are shorter. Each job is its own check in
@@ -357,13 +391,13 @@ jobs:
   # `e2e-specs`, job e2e-report) rather than first on main. The `unit-tests` status does not wait for it
   e2e:
     needs: plan
-    if: needs.plan.outputs.e2e_specs != ''
+    if: needs.plan.outputs.e2e_run != ''
     runs-on: macos-15
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.e2e_shards) }}
+        shard: ${{ fromJSON(needs.plan.outputs.e2e_run_shards) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -412,7 +446,7 @@ jobs:
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
       # one retry, so a timing flake does not fail the pull request (main-e2e still runs them without)
       - name: Run the specs
-        env: { SPECS: '${{ needs.plan.outputs.e2e_specs }}', SHARD: '${{ matrix.shard }}/${{ strategy.job-total }}' }
+        env: { SPECS: '${{ needs.plan.outputs.e2e_run }}', SHARD: '${{ matrix.shard }}/${{ strategy.job-total }}' }
         run: |
           set -euo pipefail
           for spec in $SPECS; do
@@ -540,7 +574,7 @@ jobs:
       # A run's end starts the sweep that merges a labeled pull request, and while the specs run this one has not ended:
       # start the sweep now, so a passed check merges within a minute instead of after the specs
       - name: Start a sweep now
-        if: ${{ !cancelled() && steps.post.outputs.state == 'success' && needs.plan.outputs.e2e_specs != '' }}
+        if: ${{ !cancelled() && steps.post.outputs.state == 'success' && needs.plan.outputs.e2e_run != '' }}
         env: { GH_TOKEN: '${{ github.token }}' }
         run: gh workflow run sweep.yml -R "$GITHUB_REPOSITORY"
 
@@ -558,11 +592,19 @@ jobs:
           SHA: ${{ needs.plan.outputs.sha }}
           STATUS_CONTEXT: e2e-specs
           E2E_RESULT: ${{ needs.e2e.result }}
+          E2E_RUN: ${{ needs.plan.outputs.e2e_run }}
+          E2E_CARRIED: ${{ needs.plan.outputs.e2e_carried }}
         run: |
           set -euo pipefail
+          # every spec passed on this head before, and main's newer commits reach none of them (step carry): job e2e skipped
+          carried=${E2E_CARRIED:-0}
+          if [ -z "${E2E_RUN:-}" ] && [ "$carried" -gt 0 ]; then E2E_RESULT=carried; fi
+          # the ones that ran, and how many carried with them
+          if [ "$carried" -gt 0 ]; then ran="the E2E specs this change can break, $carried carried from an earlier run"; else ran='the E2E specs this change can break'; fi
           # at most 140 characters; a job that never finished (cancelled, or no runner) is neither a pass nor a stale spec
           case "$E2E_RESULT" in
-            success) state=success; description='Passed: the E2E specs this change can break (advisory)' ;;
+            carried) state=success; description="Passed: all $carried E2E specs this change can break carried from an earlier run on this head (advisory)" ;;
+            success) state=success; description="Passed: $ran (advisory)" ;;
             failure) state=failure; description='Failed: an E2E spec this change can break; fix it in this pull request or right after (advisory)' ;;
             *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break (advisory)" ;;
           esac
@@ -577,3 +619,27 @@ jobs:
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "E2E specs for pull request ${{ inputs.pr }} at $SHA: $state"
+      # the specs that ran here and passed, merged with which main commit: what a retest of this head carries
+      # (scripts/e2e-carry.mjs). Written here, in a job that runs no pull request code; a record that fails to upload
+      # only means the next retest runs them again
+      - name: Record the E2E specs that passed
+        if: needs.e2e.result == 'success' && needs.plan.outputs.e2e_run != ''
+        continue-on-error: true
+        env:
+          PR: ${{ inputs.pr }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          E2E_RUN: ${{ needs.plan.outputs.e2e_run }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/e2e-passed"
+          jq -n --argjson pr "$PR" --arg head "$SHA" --arg base "$BASE_SHA" --arg specs "$E2E_RUN" \
+            '{version: 1, pr: $pr, head: $head, base: $base, specs: ($specs | split(" ") | map(select(. != "")))}' > "$RUNNER_TEMP/e2e-passed/record.json"
+      - if: needs.e2e.result == 'success' && needs.plan.outputs.e2e_run != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-passed-${{ needs.plan.outputs.sha }}
+          path: ${{ runner.temp }}/e2e-passed/record.json
+          if-no-files-found: error
+          retention-days: 14

@@ -43,7 +43,7 @@ jobs:
         env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
         run: node scripts/main-validation-cycle.mjs pick
 
-  # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue and no revert
+  # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue
   unit:
     needs: pick
     if: needs.pick.outputs.unit == 'true'

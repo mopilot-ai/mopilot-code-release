@@ -18,7 +18,9 @@ name: PR unit tests
 # than one job tested, job `coverage` merges their raw coverage into one report and checks the changed lines
 # (docs/unit-coverage.md#runners). A change one Linux shard can test checks its coverage in that shard. Job `plan` also
 # picks the fake-based E2E specs the change can break (scripts/e2e-select.mjs), and job `e2e` runs them on up to three
-# macOS runners (docs/unit-coverage.md#e2e-specs); the status counts them too.
+# macOS runners (docs/unit-coverage.md#e2e-specs). They are advisory: `unit-tests` does not wait for them, and job
+# `e2e-report` posts their result as its own status, `e2e-specs`, which no merge waits for; main-e2e is the net after
+# the merge, and a spec it finds stale is fixed forward.
 # Started per pull request (gh workflow run pr-unit-tests.yml -R mopilot-ai/mopilot-code-release -f pr=<n>). When it
 # finishes, sweep.yml runs: it starts this check for open pull requests whose head has none and merges pull requests
 # labeled `merge-on-green` that the merge gate allows, so an agent asked to merge does not have to poll.
@@ -270,7 +272,8 @@ jobs:
           retention-days: 1
 
   # the fake-based E2E specs the change can break, on up to three macOS runners (the account's five are shared with
-  # main-e2e), so a spec still asserting copy or a selector the change removed fails here rather than on main
+  # main-e2e), so a spec still asserting copy or a selector the change removed shows on the pull request (status
+  # `e2e-specs`, job e2e-report) rather than first on main. The `unit-tests` status does not wait for it
   e2e:
     needs: plan
     if: needs.plan.outputs.e2e_specs != ''
@@ -366,12 +369,17 @@ jobs:
           merge-multiple: true
       - run: node scripts/test-shards.mjs merge --changed=${{ needs.plan.outputs.base_sha }} coverage/raw
 
+  # the `unit-tests` status, as soon as the jobs it counts are done: the E2E specs are not among them
+  # (docs/unit-coverage.md#e2e-specs)
   report:
-    needs: [plan, static, unit, mac, coverage, e2e]
+    needs: [plan, static, unit, mac, coverage]
     if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
     runs-on: ubuntu-latest
+    # github.token starts the sweep below; no pull request code runs here
+    permissions: { actions: write }
     steps:
       - name: Post the result on the pull request's head commit
+        id: post
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.plan.outputs.sha }}
@@ -384,8 +392,6 @@ jobs:
           MAC_RESULT: ${{ needs.mac.result }}
           SPLIT: ${{ needs.plan.outputs.split }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
-          E2E_SPECS: ${{ needs.plan.outputs.e2e_specs }}
-          E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           set -euo pipefail
           # every job the plan needed counts; one it skipped ran nothing that was needed
@@ -394,10 +400,10 @@ jobs:
           need "$([ "$SHARDS" = '[]' ] && echo false || echo true)" "$UNIT_RESULT"
           need "$MAC" "$MAC_RESULT"
           need "$SPLIT" "$COVERAGE_RESULT"
-          need "$([ -n "$E2E_SPECS" ] && echo true || echo false)" "$E2E_RESULT"
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
-          if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit and E2E tests, coverage"
-          else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit or E2E tests, or coverage"; fi
+          if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
+          else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -409,3 +415,59 @@ jobs:
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"
+      # the E2E specs still running beside it, under their own status, which job e2e-report settles
+      - name: Mark the E2E specs pending
+        if: needs.plan.outputs.e2e_specs != ''
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.plan.outputs.sha }}', STATUS_CONTEXT: e2e-specs }
+        run: |
+          set -euo pipefail
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the E2E specs this change can break; advisory, no merge waits for them' \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+      # A run's end starts the sweep that merges a labeled pull request, and while the specs run this one has not ended:
+      # start the sweep now, so a passed check merges within a minute instead of after the specs
+      - name: Start a sweep now
+        if: ${{ !cancelled() && steps.post.outputs.state == 'success' && needs.plan.outputs.e2e_specs != '' }}
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: gh workflow run sweep.yml -R "$GITHUB_REPOSITORY"
+
+  # The E2E specs' result as its own status, `e2e-specs`, which no merge waits for: a spec the change left stale shows on
+  # the pull request, to be fixed in it or right after; main-e2e is the net (docs/unit-coverage.md#e2e-specs). After
+  # job report, which marked it pending
+  e2e-report:
+    needs: [plan, report, e2e]
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' && needs.plan.outputs.e2e_specs != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the E2E specs' result on the pull request's head commit
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          STATUS_CONTEXT: e2e-specs
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          set -euo pipefail
+          # at most 140 characters; a job that never finished (cancelled, or no runner) is neither a pass nor a stale spec
+          case "$E2E_RESULT" in
+            success) state=success; description='Passed: the E2E specs this change can break (advisory)' ;;
+            failure) state=failure; description='Failed: an E2E spec this change can break; fix it in this pull request or right after (advisory)' ;;
+            *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break (advisory)" ;;
+          esac
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+          echo "E2E specs for pull request ${{ inputs.pr }} at $SHA: $state"

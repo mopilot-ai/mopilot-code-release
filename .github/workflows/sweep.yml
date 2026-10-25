@@ -15,7 +15,7 @@ name: Sweep
 # builds. 0.3.33 failed that way after merge-on-green merged a release.yml change nobody then copied.
 #
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
-# Pull requests read and write for the automatic revert of a red main, Issues read and write). github.token starts the other workflows here.
+# Pull requests read, Issues read and write). github.token starts the other workflows here.
 # Secret WORKFLOW_SYNC_TOKEN: a fine-grained token with Contents and Workflows read and write on this repository only,
 # for the copy (github.token cannot change workflows). Without it the sweep warns instead of copying.
 run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}

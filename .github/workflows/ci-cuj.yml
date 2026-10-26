@@ -50,9 +50,15 @@ jobs:
           token: ${{ secrets.SOURCE_TOKEN }}
           persist-credentials: false
       - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: npm }
-      # Electron's download, kept between runs
-      - uses: actions/cache@v4
+        with: { node-version: 24 }
+      # npm's download cache, read-only for the same reason as Electron's below (the setup-node cache option would save it)
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.npm
+          key: node-cache-${{ runner.os }}-${{ runner.arch }}-npm-${{ hashFiles('**/package-lock.json') }}
+      # Electron's download, read from what main's runs saved and never saved from here: this job runs the pull request's
+      # code, and main's runs and the release restore this key (docs/unit-coverage.md#cache-writes)
+      - uses: actions/cache/restore@v4
         with:
           path: |
             ~/Library/Caches/electron

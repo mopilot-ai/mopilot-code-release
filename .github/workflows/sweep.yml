@@ -12,7 +12,7 @@ name: Sweep
 #
 # Then it copies main's workflows here (scripts/sync-release-repo.sh, which writes only the files that differ): a
 # workflow merged on main does nothing here until copied, and a release refuses a release.yml other than the one it
-# builds. 0.3.33 failed that way after merge-on-green merged a release.yml change nobody then copied.
+# builds. Sync also retains historical release.yml versions, so a newer copy never retires a tested source's recipe.
 #
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
 # Pull requests read, Issues read and write). github.token starts the other workflows here.
@@ -76,7 +76,7 @@ jobs:
           bash scripts/sync-release-repo.sh origin/main 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"
       - if: ${{ !cancelled() && env.HAS_SYNC_TOKEN != 'true' }}
         run: echo "::warning::Set the secret WORKFLOW_SYNC_TOKEN so the sweep copies main's workflows here; until then run scripts/sync-release-repo.sh after merging a workflow change."
-      # After workflow sync, so the selected verified commit must match the workflow that will actually build it.
+      # After workflow sync archives current and historical recipes; dispatch pins the selected source's version.
       # The sweep's single owner serializes dispatch reservations; Release finishing wakes it to pick up newer main.
       - name: Release verified main to dogfood
         env:

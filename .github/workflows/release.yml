@@ -1,0 +1,74 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  mac:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [arm64, x64]
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+      MOPILOT_SIGN_IDENTITY: ${{ secrets.MOPILOT_SIGN_IDENTITY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Import Developer ID certificate
+        env:
+          P12: ${{ secrets.MOPILOT_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.MOPILOT_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+      - name: Write notary API key
+        env:
+          KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          echo "$KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run typecheck && npm test
+      # package.mjs also builds the computer-use helper and sage-mcp (swift) for the arch into Contents/Helpers
+      - run: npx vite build && node scripts/package.mjs --arch ${{ matrix.arch }}
+      - name: Verify signature
+        run: |
+          APP="out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
+          codesign --verify --deep --strict -vv "$APP"
+          spctl -a -vvv -t exec "$APP"
+          xcrun stapler validate "$APP"
+          # --deep only follows nested bundles; check the Mach-Os in app.asar.unpacked (node-pty, ripgrep) one by one
+          UNPACKED="$APP/Contents/Resources/app.asar.unpacked"
+          test -x "$UNPACKED/node_modules/node-pty/prebuilds/darwin-${{ matrix.arch }}/spawn-helper"
+          test -x "$UNPACKED/node_modules/@vscode/ripgrep-darwin-${{ matrix.arch }}/bin/rg"
+          # the helper and sage-mcp: present, signed by the same team with the hardened runtime, and the helper
+          # names the main app as its only caller
+          HELPER="$APP/Contents/Helpers/MoPilot Code Computer Use.app"
+          SAGE_MCP="$APP/Contents/Helpers/sage-mcp"
+          AUTH_COMMAND="$APP/Contents/Helpers/auth-command"
+          TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+          for CODE in "$HELPER" "$SAGE_MCP" "$AUTH_COMMAND"; do
+            codesign --verify --strict -vv "$CODE"
+            codesign -dv "$CODE" 2>&1 | grep -q "flags=.*runtime" || { echo "no hardened runtime: $CODE"; exit 1; }
+            test "$(codesign -dv "$CODE" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$TEAM" || { echo "not signed by $TEAM: $CODE"; exit 1; }
+          done
+          spctl -a -vvv -t exec "$HELPER"
+          REQ=$(/usr/libexec/PlistBuddy -c 'Print :MPCPeerRequirement' "$HELPER/Contents/Info.plist")
+          codesign --verify -R="$REQ" "$APP"
+          find "$UNPACKED" -type f -print0 | xargs -0 -n1 sh -c 'codesign --verify --strict -vv "$0" && codesign -dv "$0" 2>&1 | grep -q "flags=.*runtime" || { echo "not signed with hardened runtime: $0"; exit 255; }'
+      - run: node scripts/release.mjs --arch ${{ matrix.arch }} --notes "${{ github.ref_name }}"

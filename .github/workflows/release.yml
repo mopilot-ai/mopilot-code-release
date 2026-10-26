@@ -1,12 +1,13 @@
 name: Release
 # Started from Admin → Releases → "Release main" (web/lib/releaseRun.ts), or by hand:
-#   gh workflow run release.yml -R mopilot-ai/mopilot-code-release -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
+#   gh workflow run release.yml -R mopilot-ai/mopilot-code-release --ref "release-workflow-$(git rev-parse origin/main:.github/workflows/release.yml)" -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
 # It runs in a public release repository (mopilot-ai/mopilot-code-release, whose Actions minutes are free) that
 # holds only this file, pr-unit-tests.yml and the signing secrets: variable SOURCE_REPO names this repository, and secret
 # SOURCE_TOKEN (Contents read and write on it; pr-unit-tests.yml also needs Commit statuses read and write and Pull
 # requests read) checks the commit out and pushes the release tag here.
-# scripts/sync-release-repo.sh copies this file there; a run refuses a copy that differs from this file at
-# the commit it builds. Without SOURCE_REPO it builds the repository it runs in.
+# scripts/sync-release-repo.sh copies this file there and retains every version under release-workflow-<blob>.
+# Dispatch uses the matching tag, and a run refuses a recipe differing from the source commit it builds.
+# Without SOURCE_REPO it builds the repository it runs in.
 # Builds that commit of main for macOS arm64 and x64 and Windows x64 while the release suites run (unit and
 # web on one runner, end-to-end over four): macOS is signed, notarized and stapled (app and DMG), Windows is
 # Authenticode-signed with Azure Artifact Signing and checked on Windows. Each packaged app is started once before
@@ -65,11 +66,11 @@ jobs:
       # In the release repo, this file must be the source's own at that commit (see the top of this file).
       - if: vars.SOURCE_REPO != ''
         uses: actions/checkout@v4
-        with: { path: .release-repo, sparse-checkout: .github/workflows/release.yml, sparse-checkout-cone-mode: false }
+        with: { ref: '${{ github.sha }}', path: .release-repo, sparse-checkout: .github/workflows/release.yml, sparse-checkout-cone-mode: false }
       - if: vars.SOURCE_REPO != ''
         run: |
           cmp .release-repo/.github/workflows/release.yml .github/workflows/release.yml || {
-            echo "::error::This repository's release.yml differs from $SOURCE_REPO's at $RELEASE_SHA. Copy it over: scripts/sync-release-repo.sh"
+            echo "::error::This release workflow differs from $SOURCE_REPO's at $RELEASE_SHA. Sync archives with scripts/sync-release-repo.sh and dispatch the matching workflow tag."
             exit 1
           }
           rm -rf .release-repo

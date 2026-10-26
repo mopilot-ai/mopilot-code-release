@@ -249,7 +249,7 @@ jobs:
           codesign -dv "$RG" 2>&1 | grep -q "flags=.*runtime" || { echo "no hardened runtime: $RG"; exit 1; }
           # the helper and sage-mcp: present, signed by the same team with the hardened runtime, and the helper
           # names the main app as its only caller
-          HELPER="$APP/Contents/Helpers/MoPilot Code Computer Use.app"
+          HELPER="$APP/Contents/Helpers/MoPilot Code.app"
           SAGE_MCP="$APP/Contents/Helpers/sage-mcp"
           AUTH_COMMAND="$APP/Contents/Helpers/auth-command"
           TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')

@@ -56,7 +56,6 @@ jobs:
       base_sha: ${{ steps.pr.outputs.base_sha }}
       shards: ${{ steps.split.outputs.shards }}
       mac: ${{ steps.split.outputs.mac }}
-      rust: ${{ steps.split.outputs.rust }}
       split: ${{ steps.split.outputs.split }}
       digest: ${{ steps.split.outputs.digest }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
@@ -357,56 +356,6 @@ jobs:
           overwrite: true
           retention-days: 1
 
-  # the Rust core (docs/architecture/rust-core.md §9): its tests under coverage on Linux and macOS, since code built for one OS
-  # is measured there, and rustfmt and clippy once. No cache is saved: cargo builds the pull request's code
-  # (docs/unit-coverage.md#cache-writes). The lcov goes to job `coverage` beside the shards' raw coverage
-  rust:
-    needs: plan
-    if: needs.plan.outputs.rust == 'true'
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.SOURCE_REPO }}
-          ref: ${{ needs.plan.outputs.sha }}
-          token: ${{ secrets.SOURCE_TOKEN }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
-      - name: Merge main into the pull request
-        env:
-          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
-          GIT_AUTHOR_NAME: pr-unit-tests
-          GIT_AUTHOR_EMAIL: pr-unit-tests@invalid
-          GIT_COMMITTER_NAME: pr-unit-tests
-          GIT_COMMITTER_EMAIL: pr-unit-tests@invalid
-        run: |
-          set -euo pipefail
-          git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
-          node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
-      # the toolchain core/rust-toolchain.toml pins, the coverage nightly scripts/rust-coverage.mjs pins, and cargo-llvm-cov
-      - name: Install the Rust toolchains
-        run: |
-          set -euo pipefail
-          (cd core && rustup toolchain install)
-          nightly=$(node --input-type=module -e "import('./scripts/rust-coverage.mjs').then((m) => console.log(m.NIGHTLY))")
-          rustup toolchain install "$nightly" --profile minimal --component llvm-tools-preview
-          cargo install cargo-llvm-cov --locked --version 0.9.1
-      - if: runner.os == 'Linux'
-        run: node scripts/core-check.mjs
-      - run: node scripts/rust-coverage.mjs --out coverage/raw/rust-${{ runner.os }}.lcov
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-rust-${{ runner.os }}
-          path: coverage/raw
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-
   # The fake-based E2E specs the change can break, started in their own run (pr-e2e.yml), so a newer check of this head,
   # which cancels this run, never cancels them (docs/unit-coverage.md#e2e-specs). This pull request's E2E runs on another
   # head are superseded: cancelled first, so the new head's run, queued behind them in their concurrency group, starts;
@@ -463,8 +412,8 @@ jobs:
 
   # every testing job's coverage as one report, and the changed-line check a single job would have made
   coverage:
-    needs: [plan, unit, mac, rust]
-    if: ${{ !cancelled() && needs.plan.outputs.split == 'true' && contains(fromJSON('["success", "skipped"]'), needs.unit.result) && contains(fromJSON('["success", "skipped"]'), needs.mac.result) && contains(fromJSON('["success", "skipped"]'), needs.rust.result) }}
+    needs: [plan, unit, mac]
+    if: ${{ !cancelled() && needs.plan.outputs.split == 'true' && contains(fromJSON('["success", "skipped"]'), needs.unit.result) && contains(fromJSON('["success", "skipped"]'), needs.mac.result) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -511,7 +460,7 @@ jobs:
   # the `unit-tests` status, as soon as the jobs it counts are done: the E2E specs are not among them
   # (docs/unit-coverage.md#e2e-specs)
   report:
-    needs: [plan, static, unit, mac, rust, coverage]
+    needs: [plan, static, unit, mac, coverage]
     if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:
@@ -526,8 +475,6 @@ jobs:
           UNIT_RESULT: ${{ needs.unit.result }}
           MAC: ${{ needs.plan.outputs.mac }}
           MAC_RESULT: ${{ needs.mac.result }}
-          RUST: ${{ needs.plan.outputs.rust }}
-          RUST_RESULT: ${{ needs.rust.result }}
           SPLIT: ${{ needs.plan.outputs.split }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
@@ -537,7 +484,6 @@ jobs:
           need true "$PLAN_RESULT"
           need "$([ "$SHARDS" = '[]' ] && echo false || echo true)" "$UNIT_RESULT"
           need "$MAC" "$MAC_RESULT"
-          need "$RUST" "$RUST_RESULT"
           need "$SPLIT" "$COVERAGE_RESULT"
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"

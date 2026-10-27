@@ -144,8 +144,27 @@ jobs:
       # npm test's flags on just these files (measured, not enforced: the coverage gate is the pull request's)
       - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 
+  # the Rust core's tests on Linux and macOS (docs/architecture/rust-core.md §9), on the toolchain core/rust-toolchain.toml pins
+  rust:
+    needs: pick
+    if: needs.pick.outputs.sha != ''
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - run: rustup toolchain install && cargo test --locked
+        working-directory: core
+
   report:
-    needs: [pick, test, mac]
+    needs: [pick, test, mac, rust]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -162,11 +181,13 @@ jobs:
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
           MAC_RESULT: ${{ needs.mac.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
         run: |
           set -euo pipefail
           if [ "$MAC_RESULT" != success ]; then RESULT=$MAC_RESULT; fi
-          if [ "$RESULT" = success ]; then state=success; description='Typecheck, the full unit suite and the web tests passed'
-          else state=failure; description='Typecheck, the full unit suite or the web tests failed'; fi
+          if [ "$RUST_RESULT" != success ]; then RESULT=$RUST_RESULT; fi
+          if [ "$RESULT" = success ]; then state=success; description='Typecheck, the full unit suite, the web tests and the core tests passed'
+          else state=failure; description='Typecheck, the full unit suite, the web tests or the core tests failed'; fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -203,9 +224,10 @@ jobs:
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
           MAC_RESULT: ${{ needs.mac.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
         run: |
           set -euo pipefail
-          if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ]; then state=success; else state=failure; fi
+          if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ] && [ "$RUST_RESULT" = success ]; then state=success; else state=failure; fi
           : > "$RUNNER_TEMP/failed.log"
           if [ "$state" = failure ]; then
             ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion == \"failure\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | .id")

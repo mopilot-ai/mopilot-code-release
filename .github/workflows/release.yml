@@ -231,6 +231,14 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
       - run: npm ci
+      # the Rust core's addon, which package.mjs builds for the arch (scripts/build-core.mjs): the toolchain core/ pins,
+      # with this arch's target, which build-core.mjs names
+      - name: Install the Rust core's toolchain
+        working-directory: core
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          rustup target add "$(node --input-type=module -e "import('../scripts/build-core.mjs').then((m) => console.log(m.TRIPLES['${{ matrix.arch }}']))")"
       # package.mjs builds the computer-use helper and sage-mcp (swift) for the arch into Contents/Helpers,
       # signs inside-out and notarizes and staples the app
       - run: npx vite build && node scripts/package.mjs --arch ${{ matrix.arch }}

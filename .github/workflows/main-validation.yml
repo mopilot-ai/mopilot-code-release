@@ -60,10 +60,11 @@ jobs:
     secrets: inherit
 
   # Retry unless the first try posted success (its `state` output): a job that never got a runner leaves the suite
-  # `abandoned`, neither failure nor cancelled, and a report that never posted leaves no result at all.
+  # `abandoned`, neither failure nor cancelled, and a report that never posted leaves no result at all. Not when its
+  # report said retry=false: a fixes-main merge landed after this SHA, and the next cycle tests the fix at once.
   unit-retry:
     needs: [pick, unit]
-    if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && needs.unit.outputs.state != 'success' }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && needs.unit.outputs.state != 'success' && needs.unit.outputs.retry != 'false' }}
     uses: ./.github/workflows/main-unit-tests.yml
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true }
     secrets: inherit
@@ -71,7 +72,7 @@ jobs:
   # The shards that passed on the first try are not run again; if this job fails, the retry runs every shard.
   e2e-shards:
     needs: [pick, e2e]
-    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' && needs.e2e.outputs.retry != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -87,7 +88,7 @@ jobs:
 
   e2e-retry:
     needs: [pick, e2e, e2e-shards]
-    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' }}
+    if: ${{ !cancelled() && needs.pick.outputs.retryE2e == 'true' && needs.e2e.outputs.state != 'success' && needs.e2e.outputs.retry != 'false' }}
     uses: ./.github/workflows/main-e2e.yml
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', full: "${{ needs.pick.outputs.full == 'true' }}", first_try: '${{ needs.e2e.outputs.chosen }}', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
     secrets: inherit

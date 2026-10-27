@@ -37,6 +37,8 @@ on:
     # never got a runner leaves the suite `abandoned`, a result the caller cannot tell from the others
     outputs:
       state: { value: '${{ jobs.report.outputs.state }}' }
+      # 'false' when a fixes-main merge landed after this SHA and the report recorded the failure: the cycle skips its retry
+      retry: { value: '${{ jobs.report.outputs.retry }}' }
       chosen: { value: '${{ toJSON(jobs.scope.outputs) }}' }
   workflow_dispatch:
     inputs:
@@ -209,6 +211,7 @@ jobs:
     permissions: { contents: read, actions: read }
     outputs:
       state: ${{ steps.post.outputs.state }}
+      retry: ${{ steps.issue.outputs.retry }}
     steps:
       - name: Post the result on main's commit
         id: post
@@ -252,6 +255,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Open, update or close the main-red issue
+        id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}

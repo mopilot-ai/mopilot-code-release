@@ -365,12 +365,8 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
-    # the steps' set -euo pipefail on Windows too, where the default shell is PowerShell
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:

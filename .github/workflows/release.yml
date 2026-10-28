@@ -339,10 +339,34 @@ jobs:
         run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform darwin --arch ${{ matrix.arch }} --dir out
         env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
 
+  # The Rust core for Windows, built where MSVC is, which the macOS packaging job below is not; that job signs it before it
+  # packs, so the hash the package records is the signed file's (docs/architecture/rust-core.md §8)
+  core-win:
+    needs: plan
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      # the toolchain core/rust-toolchain.toml pins; the runner's host target is the one built
+      - run: rustup toolchain install
+        working-directory: core
+      - run: node scripts/build-core.mjs --platform win32 --arch x64 --out build/vendor/win32-x64/core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-win32-x64
+          retention-days: 1
+          if-no-files-found: error
+          path: build/vendor/win32-x64/core
+
   # On macOS, as from a developer's Mac: electron-builder reads the NSIS uninstaller out of the installer
   # itself there, where on Linux it would need Wine.
   windows:
-    needs: plan
+    needs: [plan, core-win]
     runs-on: macos-15
     environment: release
     permissions: { contents: read, id-token: write }
@@ -371,7 +395,8 @@ jobs:
           printf '#!/bin/sh\nexec java -jar "%s" "$@"\n' "$RUNNER_TEMP/jsign.jar" > "$RUNNER_TEMP/bin/jsign"
           chmod +x "$RUNNER_TEMP/bin/jsign"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: npm run package:win:dir
+      - uses: actions/download-artifact@v4
+        with: { name: core-win32-x64, path: build/vendor/win32-x64/core }
       # OIDC, so no stored secret; right before signing, since GitHub's ID token is short-lived.
       # scripts/sign-win.sh asks this login for a code-signing token per file.
       - uses: azure/login@v2
@@ -379,6 +404,14 @@ jobs:
           client-id: ${{ secrets.AZURE_SIGN_CLIENT_ID }}
           tenant-id: db32a175-c842-4e74-9217-47fa7d5ae766
           allow-no-subscriptions: true
+      # the core is signed before the package records its hash (scripts/package.mjs), since signing changes the file;
+      # under a .dll name, as jsign picks the format by extension (the signature is inside the file, whatever its name)
+      - run: |
+          f=build/vendor/win32-x64/core/mopilot_core
+          mv "$f.node" "$f.dll"
+          scripts/sign-win.sh "$f.dll"
+          mv "$f.dll" "$f.node"
+      - run: npm run package:win:dir
       # signs MoPilot Code.exe, builds the NSIS installer, signs the installer
       - run: node scripts/package-win.mjs --arch x64
         env: { MOPILOT_WIN_SIGN: scripts/sign-win.sh }

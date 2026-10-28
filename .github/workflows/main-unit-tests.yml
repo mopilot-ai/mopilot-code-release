@@ -110,7 +110,9 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
+      # as the PR check installs (scripts/ci-install.mjs): the root, and the phone app's packages its tests and its type
+      # check resolve (without their native install scripts); web/ has its own step below
+      - run: node scripts/ci-install.mjs --root=miss --web=skip
       - if: matrix.shard == 1
         run: npm run typecheck
       - run: npm test
@@ -140,7 +142,7 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
+      - run: node scripts/ci-install.mjs --root=miss --web=skip
       # npm test's flags on just these files (measured, not enforced: the coverage gate is the pull request's)
       - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 

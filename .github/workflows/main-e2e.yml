@@ -6,8 +6,8 @@ name: Main E2E
 # Job `scope` (scripts/main-e2e-scope.mjs) picks what to test: only the specs the commits since main's last green run reach
 # (the selection the PR check uses), or the whole suite whenever that cannot be trusted and once a night
 # (docs/unit-coverage.md#scoped-e2e-and-the-nightly-full-run). A scoped result says so in its description.
-# The E2E shards (up to four, and shard `own` for the specs that take a runner to themselves: scripts/e2e-own-runner.mjs)
-# share the account's five macOS slots with PR checks. Jobs have 35-minute deadlines;
+# The E2E shards (one per 30 specs, and shard `own` for the specs that take a runner to themselves: scripts/e2e-own-runner.mjs)
+# share the account's five macOS slots with PR checks; a shard beyond them waits in the queue, which the deadline does not count. Jobs have 35-minute deadlines;
 # a failed suite can retry once without repeating a successful counterpart, and the retry runs only the shards that
 # did not pass (skip_shards), so its success with the first try's passes covers every shard on that SHA.
 # This workflow also accepts manual dispatch, which runs every shard.
@@ -120,16 +120,24 @@ jobs:
     steps:
       # a retry takes its first try's choice as it is; without one (or one that chose nothing) it works the choice out
       - id: reuse
-        env: { FIRST_TRY: '${{ inputs.first_try }}' }
+        env: { FIRST_TRY: '${{ inputs.first_try }}', SKIP: '${{ inputs.skip_shards }}' }
         run: |
           set -euo pipefail
           mode=$(printf '%s' "${FIRST_TRY:-}" | jq -r '.mode // empty' 2>/dev/null || true)
+          if [ -z "$mode" ] && [ -n "${FIRST_TRY:-}" ] && printf '%s' "${SKIP:-}" | jq -e 'length > 0' > /dev/null 2>&1; then
+            # the first try's scope left no answer and some of its shards passed, so it ran job e2e's fallback split: so
+            # does the retry, since skip_shards names those shards by number, and a count worked out now would split the
+            # suite differently and leave some specs in no shard that passed
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "The first try ran the fallback shards, and so does this retry"
+            exit 0
+          fi
           [ -n "$mode" ] || exit 0
           for key in mode count shards matrix specs suffix; do
             echo "$key=$(printf '%s' "$FIRST_TRY" | jq -r --arg key "$key" '.[$key] // ""')" >> "$GITHUB_OUTPUT"
           done
           echo "The first try's choice stands: $mode"
-      - if: steps.reuse.outputs.mode == ''
+      - if: steps.reuse.outputs.mode == '' && steps.reuse.outputs.fallback != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
@@ -138,14 +146,14 @@ jobs:
           # the history, to find the last green run's commit and what changed since
           fetch-depth: 0
           persist-credentials: false
-      - if: steps.reuse.outputs.mode == ''
+      - if: steps.reuse.outputs.mode == '' && steps.reuse.outputs.fallback != 'true'
         uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
       # the selection reads sources with the parser in node_modules, and needs no Electron or install script
-      - if: steps.reuse.outputs.mode == ''
+      - if: steps.reuse.outputs.mode == '' && steps.reuse.outputs.fallback != 'true'
         run: npm ci --ignore-scripts
       - id: scope
-        if: steps.reuse.outputs.mode == ''
+        if: steps.reuse.outputs.mode == '' && steps.reuse.outputs.fallback != 'true'
         env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}', FULL: '${{ inputs.full }}' }
         run: node scripts/main-e2e-scope.mjs
 
@@ -159,8 +167,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `matrix` from a scope script that knows shard `own`, `shards` from one before it, all of them when no answer
-        shard: ${{ fromJSON(needs.scope.outputs.matrix || needs.scope.outputs.shards || '[1,2,3,4,"own"]') }}
+        # `matrix` from a scope script that knows shard `own`, `shards` from one before it, the whole suite when no answer
+        # (shared/mainValidation.ts E2E_SHARDS, with the count below)
+        shard: ${{ fromJSON(needs.scope.outputs.matrix || needs.scope.outputs.shards || '[1,2,3,4,5,6,7,8,"own"]') }}
         exclude: ${{ fromJSON(inputs.skip_shards || '[]') }}
     steps:
       - uses: actions/checkout@v4
@@ -181,7 +190,7 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
-      # the whole suite in four shards, or the specs the scope picked in as many as it asked for (strategy.job-total would
+      # the whole suite or the specs the scope picked, in as many shards as it asked for (strategy.job-total would
       # shrink with the shards a retry skips); shard `own` runs the specs that take a runner to themselves, which the
       # numbered shards leave out (E2E_RUNNER, read by tests/e2e/playwright.config.ts)
       - name: Run the specs
@@ -189,7 +198,7 @@ jobs:
           MODE: ${{ needs.scope.outputs.mode }}
           SPECS: ${{ needs.scope.outputs.specs }}
           PART: ${{ matrix.shard }}
-          SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.count || 4 }}
+          SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.count || 8 }}
         run: |
           set -euo pipefail
           if [ "$PART" = own ]; then

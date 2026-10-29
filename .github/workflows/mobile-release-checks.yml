@@ -1,0 +1,66 @@
+name: Mobile release checks
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# main-e2e.yml beside it; scripts/sync-release-repo.sh copies this file there as .github/workflows/mobile-release-checks.yml.
+# The checks that build the phone app for the iOS simulator (the specs marked `// e2e-runner: release`, today
+# tests/e2e/mobile-native-vault.spec.ts, about 13 minutes) run here and nowhere else: never in the pull request check,
+# main-e2e (scoped, nightly or retried) or the app release (docs/unit-coverage.md#specs-on-their-own-runner).
+# Run it by hand before an official phone app release, on the commit the release is cut from (pushed to the source
+# repository; a full commit id, since the logs here are public and a branch name would name private work):
+#   gh workflow run mobile-release-checks.yml -R mopilot-ai/mopilot-code-release -f sha=<full commit id>
+# The specs are the ones the commit marks (node scripts/e2e-own-runner.mjs release), so a new release spec needs no edit
+# here; a commit with none fails the run rather than passing it. Each runs alone on this one macOS runner.
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read is all this workflow needs).
+# Run logs here are public: nothing is uploaded, and a failing spec shows the list reporter's output. For its traces,
+# run the spec with scripts/ci-cuj.mjs, which encrypts them to the starter's key.
+run-name: ${{ format('Mobile release checks {0}', inputs.sha) }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Full commit id of the source repository to check', required: true, type: string }
+permissions: { contents: read }
+
+jobs:
+  ios:
+    if: vars.SOURCE_REPO != ''
+    runs-on: macos-15
+    # tests/e2eOwnRunner.invariant.test.ts holds a release spec's own timeout under this
+    timeout-minutes: 90
+    steps:
+      - name: Check the input
+        env: { SHA: '${{ inputs.sha }}' }
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full commit id"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Pick the release specs
+        id: specs
+        run: |
+          set -euo pipefail
+          [ -f scripts/e2e-own-runner.mjs ] || { echo "::error::This commit predates the release specs; check a newer one"; exit 1; }
+          list=$(node scripts/e2e-own-runner.mjs release)
+          [ -n "$list" ] || { echo "::error::No spec at this commit is marked '// e2e-runner: release'"; exit 1; }
+          for spec in $list; do
+            [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
+          done
+          echo "Release specs: $(echo $list)"
+          echo "list=$(echo $list)" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - name: Run the release specs
+        env: { SPECS: '${{ steps.specs.outputs.list }}' }
+        # E2E_RUNNER=release (tests/e2e/playwright.config.ts) runs only the release specs, and naming them keeps them in the
+        # list; word splitting of SPECS is the point: one argument per spec path, each checked above. No --shard: they run alone.
+        run: E2E_RUNNER=release npx playwright test -c tests/e2e --reporter=list $SPECS
+      # what the page held when a test failed, so a failure only the runner shows can be read from the log
+      - if: failure()
+        run: |
+          for f in test-results/e2e/*/error-context.md; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; cat "$f"; echo "::endgroup::"
+          done

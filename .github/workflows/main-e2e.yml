@@ -6,7 +6,8 @@ name: Main E2E
 # Job `scope` (scripts/main-e2e-scope.mjs) picks what to test: only the specs the commits since main's last green run reach
 # (the selection the PR check uses), or the whole suite whenever that cannot be trusted and once a night
 # (docs/unit-coverage.md#scoped-e2e-and-the-nightly-full-run). A scoped result says so in its description.
-# The E2E shards (up to four) share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
+# The E2E shards (up to four, and shard `own` for the specs that take a runner to themselves: scripts/e2e-own-runner.mjs)
+# share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
 # a failed suite can retry once without repeating a successful counterpart, and the retry runs only the shards that
 # did not pass (skip_shards), so its success with the first try's passes covers every shard on that SHA.
 # This workflow also accepts manual dispatch, which runs every shard.
@@ -112,6 +113,8 @@ jobs:
       mode: ${{ steps.reuse.outputs.mode || steps.scope.outputs.mode }}
       count: ${{ steps.reuse.outputs.count || steps.scope.outputs.count }}
       shards: ${{ steps.reuse.outputs.shards || steps.scope.outputs.shards }}
+      # the shards with `own` (scripts/main-e2e-scope.mjs), which job e2e runs; `shards` stays for the numbered count
+      matrix: ${{ steps.reuse.outputs.matrix || steps.scope.outputs.matrix }}
       specs: ${{ steps.reuse.outputs.specs || steps.scope.outputs.specs }}
       suffix: ${{ steps.reuse.outputs.suffix || steps.scope.outputs.suffix }}
     steps:
@@ -122,7 +125,7 @@ jobs:
           set -euo pipefail
           mode=$(printf '%s' "${FIRST_TRY:-}" | jq -r '.mode // empty' 2>/dev/null || true)
           [ -n "$mode" ] || exit 0
-          for key in mode count shards specs suffix; do
+          for key in mode count shards matrix specs suffix; do
             echo "$key=$(printf '%s' "$FIRST_TRY" | jq -r --arg key "$key" '.[$key] // ""')" >> "$GITHUB_OUTPUT"
           done
           echo "The first try's choice stands: $mode"
@@ -155,7 +158,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.scope.outputs.shards || '[1,2,3,4]') }}
+        # `matrix` from a scope script that knows shard `own`, `shards` from one before it, all of them when no answer
+        shard: ${{ fromJSON(needs.scope.outputs.matrix || needs.scope.outputs.shards || '[1,2,3,4,"own"]') }}
         exclude: ${{ fromJSON(inputs.skip_shards || '[]') }}
     steps:
       - uses: actions/checkout@v4
@@ -177,22 +181,32 @@ jobs:
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
       # the whole suite in four shards, or the specs the scope picked in as many as it asked for (strategy.job-total would
-      # shrink with the shards a retry skips)
+      # shrink with the shards a retry skips); shard `own` runs the specs that take a runner to themselves, which the
+      # numbered shards leave out (E2E_RUNNER, read by tests/e2e/playwright.config.ts)
       - name: Run the specs
         env:
           MODE: ${{ needs.scope.outputs.mode }}
           SPECS: ${{ needs.scope.outputs.specs }}
+          PART: ${{ matrix.shard }}
           SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.count || 4 }}
         run: |
           set -euo pipefail
+          if [ "$PART" = own ]; then
+            # a run whose scope left no answer has this shard whether or not a spec needs it, and a commit from before
+            # shard `own` has no such spec: its numbered shards ran them all
+            [ -f scripts/e2e-own-runner.mjs ] || { echo "No spec takes a runner to itself at this commit"; exit 0; }
+            export E2E_RUNNER=own; part=(--pass-with-no-tests)
+          else
+            export E2E_RUNNER=shards; part=(--shard="$SHARD")
+          fi
           if [ "$MODE" = scoped ]; then
             for spec in $SPECS; do
               [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
             done
             # word splitting of SPECS is the point: one argument per spec path, each checked above
-            npx playwright test -c tests/e2e --shard="$SHARD" $SPECS
+            npx playwright test -c tests/e2e "${part[@]}" $SPECS
           else
-            npm run test:e2e -- --shard="$SHARD"
+            npm run test:e2e -- "${part[@]}"
           fi
       # what the page held when a test failed, so a failure only the runner shows can be read from the log
       - if: failure()

@@ -7,7 +7,7 @@ name: Main E2E
 # (the selection the PR check uses), or the whole suite whenever that cannot be trusted and once a night
 # (docs/unit-coverage.md#scoped-e2e-and-the-nightly-full-run). A scoped result says so in its description.
 # The E2E shards (up to four, and shard `own` for the specs that take a runner to themselves: scripts/e2e-own-runner.mjs)
-# share the account's five macOS slots with PR checks. Jobs have 25-minute deadlines;
+# share the account's five macOS slots with PR checks. Jobs have 35-minute deadlines;
 # a failed suite can retry once without repeating a successful counterpart, and the retry runs only the shards that
 # did not pass (skip_shards), so its success with the first try's passes covers every shard on that SHA.
 # This workflow also accepts manual dispatch, which runs every shard.
@@ -154,7 +154,8 @@ jobs:
     # no spec reached: nothing to run, and the report posts the pass
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.scope.outputs.mode != 'none' }}
     runs-on: macos-15
-    timeout-minutes: 25
+    # a full shard runs about 24 minutes, install included (run 40803682381): room for a slower runner or its retry
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:

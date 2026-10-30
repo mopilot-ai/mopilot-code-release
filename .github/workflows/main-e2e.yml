@@ -226,8 +226,103 @@ jobs:
             echo "::group::$f"; cat "$f"; echo "::endgroup::"
           done
 
-  report:
+  # The failure that stands (no retry follows): each failing spec not quarantined yet runs alone at this commit, and one
+  # that fails alone runs alone at main's last full green commit too, so the report can tell a flake or an old break
+  # from a merge's (scripts/e2e-quarantine.mjs, docs/unit-coverage.md#flake-quarantine). Neither job decides anything,
+  # and the plan runs on Linux, so a failure with nothing to isolate holds none of the five macOS runners.
+  isolate-plan:
     needs: [pick, scope, e2e]
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.e2e.result != 'success' && needs.e2e.result != 'skipped' && !inputs.retry_follows }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions: { contents: read, actions: read }
+    outputs:
+      specs: ${{ steps.plan.outputs.specs }}
+      green: ${{ steps.plan.outputs.green }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: plan
+        env: { GH_TOKEN: '${{ github.token }}', SOURCE_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SCOPE: '${{ inputs.scope }}', SHA: '${{ needs.pick.outputs.sha }}' }
+        run: |
+          set -euo pipefail
+          node scripts/e2e-quarantine.mjs logs "$RUNNER_TEMP/failed.log"
+          GH_TOKEN=$SOURCE_TOKEN node scripts/e2e-quarantine.mjs plan "$RUNNER_TEMP/failed.log"
+
+  isolate:
+    needs: [pick, isolate-plan]
+    if: ${{ !cancelled() && needs.isolate-plan.outputs.specs != '' }}
+    runs-on: macos-15
+    timeout-minutes: 35
+    continue-on-error: true
+    outputs:
+      verdicts: ${{ steps.verdicts.outputs.verdicts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Run each failing spec alone
+        env: { SPECS: '${{ needs.isolate-plan.outputs.specs }}' }
+        run: |
+          set -euo pipefail
+          npm ci
+          node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; }
+          : > "$RUNNER_TEMP/alone.txt"
+          for spec in $SPECS; do
+            [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
+            if npx playwright test -c tests/e2e --retries=0 "$spec"; then echo "pass $spec"; else echo "fail $spec"; fi >> "$RUNNER_TEMP/alone.txt"
+          done
+          cat "$RUNNER_TEMP/alone.txt"
+      - if: needs.isolate-plan.outputs.green != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.isolate-plan.outputs.green }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          path: green
+          persist-credentials: false
+      - name: Run each spec that failed alone at the last green commit
+        if: needs.isolate-plan.outputs.green != ''
+        working-directory: green
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/green.txt"
+          failed=$(sed -n 's/^fail //p' "$RUNNER_TEMP/alone.txt")
+          [ -n "$failed" ] || exit 0
+          npm ci
+          node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; }
+          for spec in $failed; do
+            # a spec added since green is no older break: it is left out, and so counts as caused
+            [ -f "$spec" ] || continue
+            if npx playwright test -c tests/e2e --retries=0 "$spec"; then echo "pass $spec"; else echo "fail $spec"; fi >> "$RUNNER_TEMP/green.txt"
+          done
+          cat "$RUNNER_TEMP/green.txt"
+      # whatever ran: a spec with no result counts as caused
+      - id: verdicts
+        if: always()
+        env: { SPECS: '${{ needs.isolate-plan.outputs.specs }}' }
+        run: node scripts/e2e-quarantine.mjs verdicts "$RUNNER_TEMP/alone.txt" "$RUNNER_TEMP/green.txt"
+
+  report:
+    needs: [pick, scope, e2e, isolate-plan, isolate]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -237,14 +332,46 @@ jobs:
       state: ${{ steps.post.outputs.state }}
       retry: ${{ steps.issue.outputs.retry }}
     steps:
+      # main's history at the tested commit: the triage and the issue read the likely cause from it. A step here that
+      # fails leaves the shards' own result to be posted (continue-on-error), never a pending status.
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      # the Node the scripts are written for, not whichever the runner image ships
+      - uses: actions/setup-node@v4
+        continue-on-error: true
+        with: { node-version: 24 }
+      # the failed jobs' logs, which name the failing tests; an empty file is a log that could not be read
+      - name: Read the failed jobs' logs
+        if: needs.e2e.result != 'success'
+        continue-on-error: true
+        env: { GH_TOKEN: '${{ github.token }}', SCOPE: '${{ inputs.scope }}' }
+        run: node scripts/e2e-quarantine.mjs logs "$RUNNER_TEMP/failed.log"
+      # a failure only in quarantined specs, or one isolation found a flake or an old break, posts the pass
+      - name: Triage the failure against the quarantine
+        id: triage
+        if: needs.e2e.result != 'success' && needs.e2e.result != 'skipped'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          RETRY_FOLLOWS: ${{ inputs.retry_follows }}
+          VERDICTS: ${{ needs.isolate.outputs.verdicts }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/e2e-quarantine.mjs triage "$RUNNER_TEMP/failed.log"
       - name: Post the result on main's commit
         id: post
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
-          RESULT: ${{ needs.e2e.result }}
+          RESULT: ${{ steps.triage.outputs.result || needs.e2e.result }}
           MODE: ${{ needs.scope.outputs.mode }}
-          SUFFIX: ${{ needs.scope.outputs.suffix }}
+          SUFFIX: ${{ needs.scope.outputs.suffix }}${{ steps.triage.outputs.suffix }}
         run: |
           set -euo pipefail
           # no spec reached: the shards were skipped, which is a pass
@@ -268,43 +395,17 @@ jobs:
       # SOURCE_TOKEN to have Issues read and write. A failure here leaves the status above in place. It names the likely
       # cause from main's history and the import graph of this checkout (docs/unit-coverage.md#fix-forward); it pushes
       # nothing and opens no pull request.
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.SOURCE_REPO }}
-          ref: ${{ needs.pick.outputs.sha }}
-          token: ${{ secrets.SOURCE_TOKEN }}
-          fetch-depth: 0
-          persist-credentials: false
-      # the Node the scripts are written for, not whichever the runner image ships
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
       - name: Open, update or close the main-red issue
         id: issue
         env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
-          SCOPE: ${{ inputs.scope }}
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           RETRY_FOLLOWS: ${{ inputs.retry_follows }}
           SHA: ${{ needs.pick.outputs.sha }}
-          RESULT: ${{ needs.e2e.result }}
-          MODE: ${{ needs.scope.outputs.mode }}
+          STATE: ${{ steps.post.outputs.state }}
         run: |
           set -euo pipefail
-          if [ "${MODE:-}" = none ] && [ "$RESULT" = skipped ]; then RESULT=success; fi
-          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
-          : > "$RUNNER_TEMP/failed.log"
-          if [ "$state" = failure ]; then
-            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion == \"failure\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | .id")
-            # no failed job is not an unreadable log: name the ones that did not finish (a job that never got a runner is
-            # cancelled), so the issue does not read as a test failure, or say that none failed
-            [ -n "$ids" ] || gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion != null and .conclusion != \"success\" and .conclusion != \"skipped\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | \"✘ \" + .name + \" did not finish: \" + .conclusion" >> "$RUNNER_TEMP/failed.log" || true
-            [ -n "$ids" ] || [ -s "$RUNNER_TEMP/failed.log" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
-            for id in $ids; do
-              # not gh api, which refuses a log with terminal escape sequences (every issue before #842 named no test);
-              # a log that cannot be read leaves the file empty and the issue says so
-              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" \
-                >> "$RUNNER_TEMP/failed.log" || echo "::warning::Could not read the log of job $id"
-            done
-          fi
-          GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-e2e "$SHA" "$state" \
+          # the logs step wrote what it could read; an empty file is an unreadable log, which the issue says
+          [ -f "$RUNNER_TEMP/failed.log" ] || : > "$RUNNER_TEMP/failed.log"
+          state=${STATE:-failure}
+          node scripts/main-red-issue.mjs main-e2e "$SHA" "$state" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/failed.log"

@@ -1,0 +1,59 @@
+name: Windows containment
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
+# ci-cuj.yml beside it; scripts/sync-release-repo.sh copies this file there as .github/workflows/win-containment.yml.
+# Installs a released Windows build on a clean runner, as a person would, and runs scripts/win-containment.mjs: the
+# commands a harness starts end when the harness exits and when the app quits, even a command whose own parent has
+# exited (the Job Objects of #2784, docs/architecture/rust-core.md §6 step 1). The release's own smoke launch starts the
+# app once and never stops a harness, so only this sees containment in a shipped build. A runner is nobody's desktop
+# (scripts/release-suites.cjs). Started by hand:
+#   gh workflow run win-containment.yml -R mopilot-ai/mopilot-code-release -f sha=<source commit> [-f release=v0.4.7-dogfood.19]
+# The logs are public and show only process ids and the release tested.
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read is all this workflow needs).
+run-name: ${{ format('Windows containment {0}', inputs.release || 'newest release') }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Full commit id of the source repository whose check and fake harness run', required: true, type: string }
+      release: { description: 'Release tag whose Windows installer is tested (empty: the newest release)', required: false, type: string, default: '' }
+permissions: { contents: read }
+
+jobs:
+  check:
+    if: vars.SOURCE_REPO != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check the inputs
+        shell: bash
+        env: { SHA: '${{ inputs.sha }}', RELEASE: '${{ inputs.release }}' }
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full commit id"; exit 1; }
+          [[ -z "$RELEASE" || "$RELEASE" =~ ^v[0-9A-Za-z.-]+$ ]] || { echo "::error::Expected a release tag such as v0.4.7-dogfood.19"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      # the check and its fake harness use only Node's own modules, so no npm install
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Install the release's Windows build
+        shell: pwsh
+        env: { GH_TOKEN: '${{ github.token }}', RELEASE: '${{ inputs.release }}' }
+        run: |
+          $tag = if ($env:RELEASE) { $env:RELEASE } else { gh release list -R $env:GITHUB_REPOSITORY --limit 1 --json tagName --jq '.[0].tagName' }
+          "Testing $tag"
+          gh release download $tag -R $env:GITHUB_REPOSITORY -p 'MoPilot-Code-Setup-*.exe' -D win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = Get-ChildItem -File win -Filter 'MoPilot-Code-Setup-*.exe' | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot Code.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'the installer left no MoPilot Code.exe under LOCALAPPDATA\Programs' }
+          "APP_DIR=$($exe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Check containment
+        shell: pwsh
+        run: |
+          node scripts/win-containment.mjs $env:APP_DIR
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

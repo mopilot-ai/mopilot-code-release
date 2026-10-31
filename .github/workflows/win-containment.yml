@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: Check the inputs
         shell: bash
-        env: { SHA: '86ee934c47bc960527fe653a29d353f6c0067eb2', RELEASE: '' }
+        env: { SHA: '7b7df2f138bf7f4a008ec0f934c18e4065f30e5f', RELEASE: '' }
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full commit id"; exit 1; }
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
-          ref: 86ee934c47bc960527fe653a29d353f6c0067eb2
+          ref: 7b7df2f138bf7f4a008ec0f934c18e4065f30e5f
           token: ${{ secrets.SOURCE_TOKEN }}
           persist-credentials: false
       # the check and its fake harness use only Node's own modules, so no npm install

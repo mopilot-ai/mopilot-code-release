@@ -133,7 +133,7 @@ jobs:
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
-      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --ignore-scripts
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --mobile=skip --ignore-scripts
       # of the specs the check picked, the ones an earlier run passed on this head and main's newer commits reach none of;
       # job e2e runs the rest
       - id: carry

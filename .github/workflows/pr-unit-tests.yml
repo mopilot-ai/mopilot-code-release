@@ -61,6 +61,7 @@ jobs:
       digest: ${{ steps.split.outputs.digest }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
       web: ${{ steps.split.outputs.web }}
+      static: ${{ steps.split.outputs.static }}
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
@@ -120,7 +121,7 @@ jobs:
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
-      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --ignore-scripts
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --mobile=skip --ignore-scripts
       - id: split
         run: node scripts/test-shards.mjs plan --changed=${{ steps.pr.outputs.base_sha }}
       # the fake-based E2E specs the change can break (docs/unit-coverage.md#e2e-specs), for job `e2e-start`
@@ -129,14 +130,15 @@ jobs:
 
   # the static checks, one runner each: Biome and the lint ratchet (which lints the whole tree too) take about 45 seconds
   # apiece and slow each other down on one runner's cores, the type checks are shorter. Each job is its own check in
-  # the status (the report job counts the matrix as a whole)
+  # the status (the report job counts the matrix as a whole). The plan leaves out `types` when no changed path is one
+  # the type checks read (typesChanged in scripts/precommit.mjs): main's own runs checked the rest
   static:
     needs: plan
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        check: [biome, ratchet, types]
+        check: ${{ fromJSON(needs.plan.outputs.static) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -183,7 +185,8 @@ jobs:
         with:
           path: web/node_modules
           key: web-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.web }}
-      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }}
+      # the phone app's packages are for the type check only (scripts/precommit.mjs --typecheck-mobile)
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }} ${{ matrix.check != 'types' && '--mobile=skip' || '' }}
       - if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
@@ -525,7 +528,7 @@ jobs:
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
-      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --ignore-scripts
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=skip --mobile=skip --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           pattern: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-*

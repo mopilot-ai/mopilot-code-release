@@ -3,7 +3,8 @@ name: PR E2E specs
 # scripts/sync-release-repo.sh copies this file there as .github/workflows/pr-e2e.yml.
 # The fake-based E2E specs a pull request can break (docs/unit-coverage.md#e2e-specs), in a run of their own: job
 # `e2e-start` of pr-unit-tests.yml picks them and starts this workflow with the head and the main commit it tested.
-# They are advisory: they post their own status, `e2e-specs`, which no merge waits for.
+# The Linux shards post `e2e-specs`, which the merge gate waits for; the macOS ones post `e2e-specs-mac`, which no merge
+# waits for (docs/unit-coverage.md#e2e-specs).
 # A run of their own because a newer check of the same head (a retest after main moved, merge-on-green's, one started
 # by hand) cancels the older check's run, and the specs outlast `unit-tests`: in that run they were cancelled too, left
 # `e2e-specs` pending and wasted the macOS minutes they had spent. Here the runs of one pull request queue one behind
@@ -54,7 +55,7 @@ jobs:
             exit 0
           fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
-          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the E2E specs this change can break; advisory, no merge waits for them' \
+          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the E2E specs this change can break; the merge waits for the Linux ones' \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{state: $state, context: $context, description: $description, target_url: $target_url}')
           code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
@@ -233,20 +234,44 @@ jobs:
             echo "::group::$f"; cat "$f"; echo "::endgroup::"
           done
 
-  # The E2E specs' result as its own status, `e2e-specs`, which no merge waits for: a spec the change left stale shows on
-  # the pull request, to be fixed in it or right after; main-e2e is the net (docs/unit-coverage.md#e2e-specs)
+  # The E2E specs' result as two statuses: `e2e-specs`, the Linux shards', which the merge gate waits for, so a spec the
+  # change left stale is fixed before it merges, and `e2e-specs-mac`, the macOS shards', which no merge waits for, since
+  # the account's five macOS runners queue for an hour on a busy day (docs/unit-coverage.md#e2e-specs). A Linux failure
+  # only in quarantined specs passes (scripts/pr-e2e-result.mjs, from main's checkout: no pull request code runs here).
   e2e-report:
     needs: [start, plan, e2e]
     if: ${{ !cancelled() && needs.start.outputs.sha != '' }}
     runs-on: ubuntu-latest
+    # actions: read for this run's jobs and their logs
+    permissions: { contents: read, actions: read }
     steps:
+      # main's tip, never a commit an input names: this job holds SOURCE_TOKEN, so it runs only code already merged. A
+      # step that fails leaves the job's own result to be posted, as before the split
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: main
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        continue-on-error: true
+        with: { node-version: 24 }
+      - name: Split the result by runner kind
+        id: kinds
+        if: needs.e2e.result != 'skipped'
+        continue-on-error: true
+        env: { GH_TOKEN: '${{ github.token }}', SOURCE_TOKEN: '${{ secrets.SOURCE_TOKEN }}' }
+        run: node scripts/pr-e2e-result.mjs
       - name: Post the E2E specs' result on the pull request's head commit
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.start.outputs.sha }}
-          E2E_RESULT: ${{ needs.e2e.result }}
-          E2E_RUN: ${{ needs.plan.outputs.e2e_run }}
+          # the Linux shards' result (`none`: no Linux shard ran); the job's own when it could not be split
+          E2E_RESULT: ${{ steps.kinds.outputs.linux || needs.e2e.result }}
+          E2E_RUN: ${{ needs.plan.outputs.e2e_run_linux }}
           E2E_CARRIED: ${{ needs.plan.outputs.e2e_carried }}
+          NOTE: ${{ steps.kinds.outputs.note }}
         run: |
           set -euo pipefail
           # every spec passed on this head before, and main's newer commits reach none of them (step carry): job e2e skipped
@@ -255,12 +280,15 @@ jobs:
           # the ones that ran, and how many carried with them
           if [ "$carried" -gt 0 ]; then ran="the E2E specs this change can break, $carried carried from an earlier run"; else ran='the E2E specs this change can break'; fi
           # at most 140 characters; a job that never finished (cancelled, or no runner) is neither a pass nor a stale spec
+          # the merge gate waits for this status and holds a failure; `error` (never finished) holds nothing
           case "$E2E_RESULT" in
-            carried) state=success; description="Passed: all $carried E2E specs this change can break carried from an earlier run on this head (advisory)" ;;
-            success) state=success; description="Passed: $ran (advisory)" ;;
-            failure) state=failure; description='Failed: an E2E spec this change can break; fix it in this pull request or right after (advisory)' ;;
-            *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break (advisory)" ;;
+            carried) state=success; description="Passed: all $carried E2E specs this change can break carried from an earlier run on this head" ;;
+            success) state=success; description="Passed: $ran, on Linux${NOTE:-}" ;;
+            none) state=success; description='Passed: none of the E2E specs this change can break runs on Linux; the macOS ones post e2e-specs-mac' ;;
+            failure) state=failure; description='Failed: an E2E spec this change can break, on Linux; fix it in this pull request before it merges' ;;
+            *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break, on Linux" ;;
           esac
+          description=${description:0:140}
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -272,6 +300,32 @@ jobs:
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "E2E specs for pull request ${{ inputs.pr }} at $SHA: $state"
+      # the macOS shards' own status, which no merge waits for
+      - name: Post the macOS E2E specs' result on the pull request's head commit
+        if: needs.plan.outputs.e2e_run_mac != ''
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SHA: ${{ needs.start.outputs.sha }}
+          STATUS_CONTEXT: e2e-specs-mac
+          E2E_RESULT: ${{ steps.kinds.outputs.mac || needs.e2e.result }}
+        run: |
+          set -euo pipefail
+          case "$E2E_RESULT" in
+            success) state=success; description='Passed: the E2E specs this change can break that need a Mac (advisory)' ;;
+            failure) state=failure; description='Failed: an E2E spec this change can break that needs a Mac; fix it in this pull request or right after (advisory)' ;;
+            *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break that need a Mac (advisory)" ;;
+          esac
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+          echo "macOS E2E specs for pull request ${{ inputs.pr }} at $SHA: $state"
       # the specs that ran here and passed, merged with which main commit: what a later run of this head carries
       # (scripts/e2e-carry.mjs), the one waiting behind this one included. Written here, in a job that runs no pull
       # request code; a record that fails to upload only means the next run of this head runs them again

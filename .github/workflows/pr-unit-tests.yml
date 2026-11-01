@@ -19,9 +19,9 @@ name: PR unit tests
 # (docs/unit-coverage.md#runners). A change one Linux shard can test checks its coverage in that shard. Job `plan` also
 # picks the fake-based E2E specs the change can break (scripts/e2e-select.mjs), and job `e2e-start` runs them in a
 # workflow of their own, pr-e2e.yml: on up to six Linux runners under xvfb, and the few that need a Mac on one macOS
-# runner (docs/unit-coverage.md#e2e-specs). They are advisory: `unit-tests` does not wait for
-# them, and they post their result as their own status, `e2e-specs`, which no merge waits for; main-e2e is the net after
-# the merge, and a spec it finds stale is fixed forward. In their own run, a newer check of the same head, which cancels
+# runner (docs/unit-coverage.md#e2e-specs). `unit-tests` does not count them: they post their result as their own
+# statuses, `e2e-specs` for the Linux shards, which the merge gate waits for and holds a failure of, and `e2e-specs-mac`,
+# which no merge waits for; main-e2e is the net after the merge. In their own run, a newer check of the same head, which cancels
 # this one, does not cancel them: its own E2E run waits for theirs and carries what they passed
 # (docs/unit-coverage.md#e2e-carry).
 # Started per pull request (node scripts/pr-check-start.mjs <n>, which marks the head `Queued` first). When it
@@ -416,7 +416,8 @@ jobs:
   # head are superseded: cancelled first, so the new head's run, queued behind them in their concurrency group, starts;
   # also when this head picked no specs, or its plan failed. A run of the same head is left alone: the new one waits for
   # it and carries what it passed. A check whose head the pull request no longer has does neither: the newer head's
-  # check decides. No pull request code runs here
+  # check decides. A head that picked specs is marked pending first, so it never shows no `e2e-specs` while its run waits
+# to start or was never started: the merge gate reads no status as none picked. No pull request code runs here
   e2e-start:
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
@@ -424,7 +425,27 @@ jobs:
     # github.token cancels and starts runs of pr-e2e.yml
     permissions: { actions: write }
     steps:
+      # before the dispatch, which the run's job start follows with its own pending status; on a head the pull request
+      # has since left it marks a commit no merge reads. It links the E2E workflow, not this run: carrying passed specs,
+      # an E2E run reads every run an e2e-specs status links as an E2E run of the head
+      - name: Mark the picked specs queued on the head
+        if: needs.plan.outputs.e2e_specs != ''
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.plan.outputs.sha }}', STATUS_CONTEXT: e2e-specs }
+        run: |
+          set -euo pipefail
+          # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
+          payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Queued: the E2E specs this change can break; the merge waits for the Linux ones' \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/pr-e2e.yml" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data-raw "$payload" --output /dev/null --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
+          [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
+      # also when the mark failed: the specs still run, and their run's job start marks them pending
       - name: Start the E2E specs in their own run
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           # the pull request's head now, read from the source repository
@@ -513,9 +534,10 @@ jobs:
       - run: node scripts/test-shards.mjs merge --changed=${{ needs.plan.outputs.base_sha }} coverage/raw
 
   # the `unit-tests` status, as soon as the jobs it counts are done: the E2E specs are not among them
-  # (docs/unit-coverage.md#e2e-specs)
+  # (docs/unit-coverage.md#e2e-specs). It also waits for job e2e-start, whatever its result, so a head that picked specs
+  # shows `e2e-specs` pending before `unit-tests` can let the merge gate merge it
   report:
-    needs: [plan, static, unit, mac, rust, coverage]
+    needs: [plan, static, unit, mac, rust, coverage, e2e-start]
     if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:

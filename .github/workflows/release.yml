@@ -112,10 +112,16 @@ jobs:
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
       - if: matrix.shard == 1
         run: npm run typecheck
-      - run: npm test
+      # named as main's unit run names them (.github/release-repo/main-unit-tests.yml), which runs what this job does
+      - name: Run the unit tests
+        run: npm test
         env: { UNIT_TEST_SHARD: '${{ matrix.shard }}/3' }
       - if: matrix.shard == 1
-        run: npm ci && npm run typecheck && npm test
+        run: npm ci && npm run typecheck
+        working-directory: web
+      - name: Run the web tests
+        if: matrix.shard == 1
+        run: npm test
         working-directory: web
 
   unit-mac:
@@ -134,7 +140,8 @@ jobs:
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
+      - name: Run the Mac-only tests
+        run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 
   # the specs that need a Mac on macOS, the rest on Linux under xvfb, as main-e2e.yml splits them (scripts/e2e-own-runner.mjs,
   # docs/unit-coverage.md#runner-kinds-on-main), so main's green run of the same commit stands for this job

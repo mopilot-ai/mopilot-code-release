@@ -146,14 +146,42 @@ jobs:
       # npm test's flags on just these files (measured, not enforced: the coverage gate is the pull request's)
       - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 
-  # the Rust core's tests on Linux, macOS and Windows (docs/architecture/rust-core.md §9), on the toolchain
-  # core/rust-toolchain.toml pins
-  rust:
+  # the runners job rust tests the core on (scripts/main-core-scope.mjs): Linux always, macOS and Windows only when the
+  # core changed since main's last green run, so they do not take a macOS slot from the E2E shards when it did not. A job
+  # that leaves no answer (a commit from before the script, a failure) counts as a change: every runner
+  rust-scope:
     needs: pick
     if: needs.pick.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    outputs:
+      os: ${{ steps.scope.outputs.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the history, to find the last green run's commit and what changed since
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: scope
+        if: hashFiles('scripts/main-core-scope.mjs') != ''
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}' }
+        run: node scripts/main-core-scope.mjs
+
+  # the Rust core's tests on Linux, macOS and Windows (docs/architecture/rust-core.md §9), on the toolchain
+  # core/rust-toolchain.toml pins; one runner's failure does not cancel the others
+  rust:
+    needs: [pick, rust-scope]
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        os: ${{ fromJSON(needs.rust-scope.outputs.os || '["ubuntu-latest", "macos-15", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:

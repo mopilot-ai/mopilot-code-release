@@ -383,7 +383,8 @@ jobs:
       - name: Read the failed jobs' logs
         if: needs.e2e.result != 'success'
         continue-on-error: true
-        env: { GH_TOKEN: '${{ github.token }}', SCOPE: '${{ inputs.scope }}' }
+        # the step that runs specs (TEST_STEPS): a failure in any other names no spec, so it never reads as main's known red
+        env: { GH_TOKEN: '${{ github.token }}', SCOPE: '${{ inputs.scope }}', TEST_STEPS: 'Run the specs' }
         run: node scripts/e2e-quarantine.mjs logs "$RUNNER_TEMP/failed.log"
       # a failure only in quarantined specs, or one isolation found a flake or an old break, posts the pass
       - name: Triage the failure against the quarantine
@@ -412,10 +413,11 @@ jobs:
           # a scoped result says so ("(scoped: …)"): only a full pass vouches for the specs it did not run
           if [ "$RESULT" = success ]; then state=success; description="The end-to-end suite passed${SUFFIX:-}"
           else state=failure; description="The end-to-end suite failed${SUFFIX:-}; see the failing shards"; fi
+          # Scope and quarantine details together can exceed GitHub's 140-character status limit; keep the leading scope marker.
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{state: $state, context: $context, description: $description, target_url: $target_url}')
+            '{state: $state, context: $context, description: $description[0:140], target_url: $target_url}')
           code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
             --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
             --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
@@ -433,6 +435,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           RETRY_FOLLOWS: ${{ inputs.retry_follows }}
+          RED_HOLD: ${{ vars.RED_HOLD }}
           SHA: ${{ needs.pick.outputs.sha }}
           STATE: ${{ steps.post.outputs.state }}
         run: |

@@ -93,6 +93,37 @@ jobs:
     with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'e2e-retry', full: "${{ needs.pick.outputs.full == 'true' }}", first_try: '${{ needs.e2e.outputs.chosen }}', reuse_success: true, skip_shards: '${{ needs.e2e-shards.outputs.skip }}' }
     secrets: inherit
 
+  # A merge-train commit lands only if both suites pass: once one fails its last try (its retry, or a first try no retry
+  # follows), the cycle posts its failure and cancels itself, and the sweep splits the train at once instead of waiting
+  # for the other suite. `stop` does nothing on main, whose cycles finish (docs/unit-coverage.md#merge-train).
+  stop-unit:
+    needs: [pick, unit, unit-retry]
+    if: ${{ !cancelled() && (needs.unit-retry.outputs.state == 'failure' || (needs.unit.outputs.state == 'failure' && (needs.pick.outputs.retryUnit != 'true' || needs.unit.outputs.retry == 'false'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
+        run: node scripts/main-validation-cycle.mjs stop
+
+  stop-e2e:
+    needs: [pick, e2e, e2e-retry]
+    if: ${{ !cancelled() && (needs.e2e-retry.outputs.state == 'failure' || (needs.e2e.outputs.state == 'failure' && (needs.pick.outputs.retryE2e != 'true' || needs.e2e.outputs.retry == 'false'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
+        run: node scripts/main-validation-cycle.mjs stop
+
   finish:
     needs: [pick, unit, e2e, unit-retry, e2e-retry]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}

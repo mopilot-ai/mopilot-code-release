@@ -115,10 +115,17 @@ jobs:
       - run: node scripts/ci-install.mjs --root=miss --web=skip
       - if: matrix.shard == 1
         run: npm run typecheck
-      - run: npm test
+      # the steps that run tests are named, and the report lists them (TEST_STEPS): a failure in any other step names
+      # no test file, so it can never read as main's known red (docs/unit-coverage.md#known-red-baseline)
+      - name: Run the unit tests
+        run: npm test
         env: { UNIT_TEST_SHARD: '${{ matrix.shard }}/3' }
       - if: matrix.shard == 1
-        run: npm ci && npm run typecheck && npm test
+        run: npm ci && npm run typecheck
+        working-directory: web
+      - name: Run the web tests
+        if: matrix.shard == 1
+        run: npm test
         working-directory: web
 
   # the tests that need a real Mac, which the Linux job skips or checks only in part
@@ -144,7 +151,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: node scripts/ci-install.mjs --root=miss --web=skip
       # npm test's flags on just these files (measured, not enforced: the coverage gate is the pull request's)
-      - run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
+      - name: Run the Mac-only tests
+        run: files=$(node scripts/mac-only-tests.mjs --all); [ -z "$files" ] || npm run test:coverage -- --report-only $files
 
   # the runners job rust tests the core on (scripts/main-core-scope.mjs): Linux always, macOS and Windows only when the
   # core changed since main's last green run, so they do not take a macOS slot from the E2E shards when it did not. A job
@@ -245,13 +253,26 @@ jobs:
       # the Node the scripts are written for, not whichever the runner image ships
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
+      # the failed jobs' logs, which name the failing tests, and every failed step that ran none (scripts/e2e-quarantine.mjs);
+      # an empty file is a log that could not be read
+      - name: Read the failed jobs' logs
+        if: needs.test.result != 'success' || needs.mac.result != 'success' || needs.rust.result != 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCOPE: ${{ inputs.scope }}
+          TEST_STEPS: |
+            Run the unit tests
+            Run the web tests
+            Run the Mac-only tests
+        run: node scripts/e2e-quarantine.mjs logs "$RUNNER_TEMP/failed.log"
       - name: Open, update or close the main-red issue
         id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
-          SCOPE: ${{ inputs.scope }}
           RETRY_FOLLOWS: ${{ inputs.retry_follows }}
+          RED_HOLD: ${{ vars.RED_HOLD }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
           MAC_RESULT: ${{ needs.mac.result }}
@@ -259,19 +280,6 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ] && [ "$RUST_RESULT" = success ]; then state=success; else state=failure; fi
-          : > "$RUNNER_TEMP/failed.log"
-          if [ "$state" = failure ]; then
-            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion == \"failure\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | .id")
-            # no failed job is not an unreadable log: name the ones that did not finish (a job that never got a runner is
-            # cancelled), so the issue does not read as a test failure, or say that none failed
-            [ -n "$ids" ] || gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq ".jobs[] | select(.conclusion != null and .conclusion != \"success\" and .conclusion != \"skipped\") | select(\"$SCOPE\" == \"\" or (.name | startswith(\"$SCOPE / \"))) | \"✘ \" + .name + \" did not finish: \" + .conclusion" >> "$RUNNER_TEMP/failed.log" || true
-            [ -n "$ids" ] || [ -s "$RUNNER_TEMP/failed.log" ] || echo "No job of this run failed; see the run." >> "$RUNNER_TEMP/failed.log"
-            for id in $ids; do
-              # not gh api, which refuses a log with terminal escape sequences (every issue before #842 named no test);
-              # a log that cannot be read leaves the file empty and the issue says so
-              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" \
-                >> "$RUNNER_TEMP/failed.log" || echo "::warning::Could not read the log of job $id"
-            done
-          fi
+          [ -f "$RUNNER_TEMP/failed.log" ] || : > "$RUNNER_TEMP/failed.log"
           GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-unit-tests "$SHA" "$state" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/failed.log"

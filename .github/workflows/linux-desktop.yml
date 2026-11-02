@@ -1,0 +1,106 @@
+name: Linux desktop validation
+# Runs in the public release repository on isolated native runners. Only encrypted packages and evidence leave the runner.
+# scripts/sync-release-repo.sh installs this manual workflow after the source change merges; it never publishes a release.
+run-name: Linux desktop fc28-0786bbd625-1793647478068
+on:
+  push:
+    branches: ['linux-validation/fc28-0786bbd625-1793647478068']
+permissions: { contents: read }
+env:
+  SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+jobs:
+  desktop:
+    if: vars.SOURCE_REPO != ''
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Validate the source commit and encryption key
+        id: validate
+        env: { SHA: '0786bbd6256641befd9a6b1078d32cad2f0fb329', PUBLIC_KEY: 'MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAi3ii3Rsm8e1PpiZ5I65QiOuTdq3scOWMh3DNeyNNtI0PSyQ8q0nXv3NCsYmDPqOFnJ7e/4xBH7yVfEC0Fs2OgTgOYdZkEUF4tvQx8lH9mikAf1J11ZO0IVKW8EgGvUXZrZCvhsYlL8+DqcTVjvsCwP/QASBPZzsL+dE2jHm2z/OfaB4GDQ0HyvO3NML+EGGrf1wEkgY1pe8AV7+RJ3SlC1ZS0lZE3fNychM8XgPljOVBmKNaC7yOO+MAm6H8Ig3qq5ao95QtOcfEbKznKLgvx3+idm7vWjA02EPJ+/3ubjVsdoRpydXlQPRtpKB7TAG+KIRSjf5cmvMaSlkfkOc7YyTm8fpP1s8LlK7In1rAiJYB4PjzM5V5Docx1SuIWboj4UOs9lxCDaDNm2vbRD0vkNtO8Nh84jwCKdiHu7fx3fa7VZBuxILkPEU0i00KX9mWEp+lO9RPthAT139izK85jUD7CKars3CKDrXf9rzIogrhFllkb7FgMSPDfIyEOMzhAgMBAAE=' }
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Expected a full source commit id'; exit 1; }
+          printf '%s' "$PUBLIC_KEY" | base64 --decode > "$RUNNER_TEMP/evidence-public.der"
+          openssl rsa -pubin -inform DER -in "$RUNNER_TEMP/evidence-public.der" -noout
+          mkdir -p "$RUNNER_TEMP/linux-evidence"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: 0786bbd6256641befd9a6b1078d32cad2f0fb329
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Install build and desktop dependencies
+        run: |
+          sudo apt-get update > "$RUNNER_TEMP/linux-evidence/apt.log" 2>&1
+          sudo apt-get install -y build-essential python3 libgtk-3-0 libnss3 libxss1 libasound2t64 libsecret-1-0 gnome-keyring dbus-x11 xvfb iproute2 >> "$RUNNER_TEMP/linux-evidence/apt.log" 2>&1
+      - name: Install application dependencies
+        run: npm ci > "$RUNNER_TEMP/linux-evidence/npm.log" 2>&1
+      - name: Install the pinned Rust toolchain
+        working-directory: core
+        run: rustup toolchain install > "$RUNNER_TEMP/linux-evidence/rust.log" 2>&1
+      - name: Build the Linux packages
+        run: npm run package:linux > "$RUNNER_TEMP/linux-evidence/build.log" 2>&1
+      - name: Install and exercise the packaged desktop
+        env: { XDG_CURRENT_DESKTOP: GNOME }
+        run: |
+          set -euo pipefail
+          {
+            sudo apt-get install -y ./out/MoPilot-Code-*-$(node -p process.arch).deb
+            dbus-run-session -- bash -euo pipefail -c '
+              mapfile -t installed < <(dpkg-query -L mopilot-code | sed -n "/^\/opt\/.*\/mopilot-code$/p")
+              [ "${#installed[@]}" -eq 1 ]
+              printf "%s" "mopilot-ci" | gnome-keyring-daemon --unlock --components=secrets
+              xvfb-run -a node scripts/smoke-launch.mjs "$(dirname "${installed[0]}")"
+              xvfb-run -a node tests/packaged/linux-desktop.mjs "${installed[0]}"
+            '
+          } > "$RUNNER_TEMP/linux-evidence/desktop.log" 2>&1
+      - name: Encrypt packages and validation evidence
+        if: ${{ always() && !cancelled() && steps.validate.outcome == 'success' }}
+        env: { PUBLIC_KEY: 'MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAi3ii3Rsm8e1PpiZ5I65QiOuTdq3scOWMh3DNeyNNtI0PSyQ8q0nXv3NCsYmDPqOFnJ7e/4xBH7yVfEC0Fs2OgTgOYdZkEUF4tvQx8lH9mikAf1J11ZO0IVKW8EgGvUXZrZCvhsYlL8+DqcTVjvsCwP/QASBPZzsL+dE2jHm2z/OfaB4GDQ0HyvO3NML+EGGrf1wEkgY1pe8AV7+RJ3SlC1ZS0lZE3fNychM8XgPljOVBmKNaC7yOO+MAm6H8Ig3qq5ao95QtOcfEbKznKLgvx3+idm7vWjA02EPJ+/3ubjVsdoRpydXlQPRtpKB7TAG+KIRSjf5cmvMaSlkfkOc7YyTm8fpP1s8LlK7In1rAiJYB4PjzM5V5Docx1SuIWboj4UOs9lxCDaDNm2vbRD0vkNtO8Nh84jwCKdiHu7fx3fa7VZBuxILkPEU0i00KX9mWEp+lO9RPthAT139izK85jUD7CKars3CKDrXf9rzIogrhFllkb7FgMSPDfIyEOMzhAgMBAAE=' }
+        run: |
+          set -euo pipefail
+          parts=("$RUNNER_TEMP/linux-evidence")
+          [ ! -e test-results/linux-package ] || parts+=(test-results/linux-package)
+          tar -czf "$RUNNER_TEMP/linux-evidence.tgz" "${parts[@]}"
+          packages=(); for p in out/*.deb out/*.tar.gz; do [ ! -e "$p" ] || packages+=("$p"); done
+          [ ${#packages[@]} -eq 0 ] || tar -czf "$RUNNER_TEMP/linux-packages.tgz" "${packages[@]}"
+          node --input-type=module - <<'JS'
+          import * as c from 'node:crypto';
+          import fs from 'node:fs';
+          const dir = process.env.RUNNER_TEMP;
+          const pub = c.createPublicKey({ key: Buffer.from(process.env.PUBLIC_KEY, 'base64'), format: 'der', type: 'spki' });
+          for (const name of ['evidence', 'packages']) {
+            const archive = `${dir}/linux-${name}.tgz`;
+            if (!fs.existsSync(archive)) continue;
+            const output = `${dir}/linux-encrypted-${name}`;
+            fs.mkdirSync(output);
+            const key = c.randomBytes(32), iv = c.randomBytes(12), aes = c.createCipheriv('aes-256-gcm', key, iv);
+            const body = Buffer.concat([aes.update(fs.readFileSync(archive)), aes.final()]);
+            const sealed = c.publicEncrypt({ key: pub, padding: c.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, key);
+            fs.writeFileSync(`${output}/key.enc`, sealed);
+            fs.writeFileSync(`${output}/bundle.enc`, Buffer.concat([iv, aes.getAuthTag(), body]));
+          }
+          JS
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !cancelled() && steps.validate.outcome == 'success' }}
+        with:
+          name: linux-validation-${{ matrix.arch }}
+          path: ${{ runner.temp }}/linux-encrypted-evidence
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !cancelled() && steps.validate.outcome == 'success' }}
+        with:
+          name: linux-packages-${{ matrix.arch }}
+          path: ${{ runner.temp }}/linux-encrypted-packages
+          retention-days: 1
+          if-no-files-found: ignore

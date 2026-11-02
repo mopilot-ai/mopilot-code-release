@@ -24,11 +24,66 @@ env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
 
 jobs:
-  cuj:
+  # Which runner the macOS shards use (docs/mini-runner.md): the owner's Mac mini for the owner's own work while the lane
+  # is on and a runner is online, GitHub's otherwise. The decision is main's scripts/mini-lane.mjs, run from a checkout
+  # of main (never the pull request's code, which holds no token here); any failure here is GitHub's runner.
+  route:
     if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    # the wait for an offline mini (MINI_WAIT_SECONDS) is at most a few minutes
+    timeout-minutes: 10
+    # actions: write for the watchdog step
+    permissions: { contents: read, actions: write }
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on || '"macos-15"' }}
+    steps:
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: main
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        continue-on-error: true
+        with: { node-version: 24 }
+      # a job that waited too long for the mini (it lost a race for the last idle runner) holds its pull request's runs for
+      # up to 24 hours; cancel such runs (only when nothing of theirs runs on the mini) so a retest runs on GitHub's runner,
+      # and mark their e2e statuses error (scripts/mini-watchdog.mjs). The job's own token with actions: write, and the
+      # source token for the statuses
+      - name: Cancel runs stuck waiting for the mini
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINI_LABEL: ${{ vars.MINI_LABEL }}
+          MINI_QUEUE_MINUTES: ${{ vars.MINI_QUEUE_MINUTES }}
+          # the statuses of a cancelled pull request run, marked error so the merge gate does not wait on a stale pending
+          SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+        run: node scripts/mini-watchdog.mjs
+      - id: pick
+        continue-on-error: true
+        env:
+          MINI_LANE: ${{ vars.MINI_LANE }}
+          MINI_OWNER: ${{ vars.MINI_OWNER }}
+          MINI_LABEL: ${{ vars.MINI_LABEL }}
+          MINI_WAIT_SECONDS: ${{ vars.MINI_WAIT_SECONDS }}
+          # the launcher's slots and this run's macOS shards: a run whose shards do not all fit idle runners goes to GitHub
+          MINI_SLOTS: ${{ vars.MINI_SLOTS }}
+          MAC_JOBS: ${{ inputs.shards }}
+          RUNNERS_TOKEN: ${{ secrets.MINI_RUNNERS_TOKEN }}
+          # whoever started this run (scripts/ci-cuj.mjs, with their own gh login)
+          REQUESTER: ${{ github.actor }}
+        run: node scripts/mini-lane.mjs
+
+  cuj:
+    needs: route
+    # !cancelled(): a route job that failed or timed out leaves the shards on GitHub's runner, never skipped
+    if: ${{ !cancelled() && vars.SOURCE_REPO != '' }}
     # scripts/ci-cuj.mjs finds each shard's job and artifact by this index
     name: shard ${{ matrix.index }}
-    runs-on: macos-15
+    # the owner's Mac mini or GitHub's macOS runner, as job route decides (docs/mini-runner.md)
+    runs-on: ${{ fromJSON(needs.route.outputs.runs_on || '"macos-15"') }}
     timeout-minutes: 90
     strategy:
       fail-fast: false

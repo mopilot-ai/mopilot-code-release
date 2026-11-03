@@ -10,8 +10,10 @@ name: Watch
 # that ended within ten minutes of starting, which would loop; docs/unit-coverage.md#sweep).
 # A change here or to the script takes effect at the next hand-over; cancel the run to apply it sooner.
 #
-# Secret SOURCE_TOKEN: the token the other workflows use (only read here). github.token starts the sweep and the next
-# watcher run.
+# Variable CI_APP_ID and secret CI_APP_PRIVATE_KEY: the CI App, whose installation token the script reads the source
+# repository with, minting a new one before each token's hour is up (scripts/gh.mjs appGh). Secret SOURCE_TOKEN: the
+# token the other workflows use (only read here), used until the App's token can be minted. github.token starts the
+# sweep and the next watcher run.
 run-name: Watch for pull requests with no check
 on:
   workflow_dispatch:
@@ -36,5 +38,5 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Start a sweep for each pull request head with no check
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
         run: node scripts/ci-watch.mjs

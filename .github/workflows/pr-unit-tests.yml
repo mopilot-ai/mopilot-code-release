@@ -13,7 +13,7 @@ name: PR unit tests
 # branch from before that still holds it, and the merge drops it (scripts/merge-generated.mjs), so a conflict only there
 # does not fail the check; any other conflict does. A change without source or test files passes without running tests. Merges go through the merge gate (scripts/merge-gate.mjs).
 # Job `plan` finds the related tests and splits them (scripts/test-shards.mjs): the free plan here runs five macOS jobs
-# at once and about twenty Linux ones, so job `static` runs the static checks, job `unit` runs the tests on up to four
+# at once and about twenty Linux ones, so job `static` runs the static checks, job `unit` runs the tests on up to three
 # Linux shards, job `mac` runs only the related tests that need a real Mac (scripts/mac-only-tests.mjs), and when more
 # than one job tested, job `coverage` merges their raw coverage into one report and checks the changed lines
 # (docs/unit-coverage.md#runners). A change one Linux shard can test checks its coverage in that shard. Job `plan` also
@@ -66,6 +66,7 @@ jobs:
       rust: ${{ steps.split.outputs.rust }}
       split: ${{ steps.split.outputs.split }}
       digest: ${{ steps.split.outputs.digest }}
+      parts: ${{ steps.split.outputs.parts }}
       e2e_specs: ${{ steps.e2e.outputs.e2e_specs }}
       web: ${{ steps.split.outputs.web }}
       static: ${{ steps.split.outputs.static }}
@@ -142,17 +143,15 @@ jobs:
       - id: e2e
         run: node scripts/e2e-select.mjs --changed=${{ steps.pr.outputs.base_sha }}
 
-  # the static checks, one runner each: Biome and the lint ratchet (which lints the whole tree too) take about 45 seconds
-  # apiece and slow each other down on one runner's cores, the type checks are shorter. Each job is its own check in
-  # the status (the report job counts the matrix as a whole). The plan leaves out `types` when no changed path is one
-  # the type checks read (typesChanged in scripts/precommit.mjs): main's own runs checked the rest
+  # the static checks, one after another on one runner: Biome and the lint ratchet (which lints the whole tree too) take
+  # about a minute apiece and the type checks less, so the job ends within the test shards' time for all but the smallest
+  # changes, and a runner each would spend about 40 seconds more apiece on checkout and install (docs/unit-coverage.md#runners).
+  # Every check runs once the install succeeded, even after another failed, so every failure shows at once. The plan
+  # leaves out `types` when no changed path is one the type checks read (typesChanged in scripts/precommit.mjs): main's
+  # own runs checked the rest
   static:
     needs: plan
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        check: ${{ fromJSON(needs.plan.outputs.static) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -166,8 +165,7 @@ jobs:
         uses: actions/setup-node@v4
         with: { node-version: 24 }
       # the pre-commit hook's header check: every source file has a one-line header comment (it needs only Node)
-      - if: matrix.check == 'biome'
-        run: npm run module-map -- --check
+      - run: npm run module-map -- --check
       # what merging would produce. main's scripts/merge-generated.mjs merges (the pull request may predate it) and
       # drops the generated files main no longer commits (docs/module-map.md), so a conflict only there is none, as
       # merge-on-green's result has it. Any other conflict fails the check (merge main into the branch and push)
@@ -194,13 +192,14 @@ jobs:
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
       # web/ is for its type check only
       - id: webdeps
-        if: matrix.check == 'types'
+        if: contains(fromJSON(needs.plan.outputs.static), 'types')
         uses: actions/cache/restore@v4
         with:
           path: web/node_modules
           key: web-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.web }}
       # the phone app's packages are for the type check only (scripts/precommit.mjs --typecheck-mobile)
-      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }} ${{ matrix.check != 'types' && '--mobile=skip' || '' }}
+      - run: node scripts/ci-install.mjs --root=${{ steps.deps.outputs.cache-hit == 'true' && 'hit' || 'miss' }} --web=${{ steps.webdeps.outcome == 'skipped' && 'skip' || (steps.webdeps.outputs.cache-hit == 'true' && 'hit' || 'miss') }} ${{ !contains(fromJSON(needs.plan.outputs.static), 'types') && '--mobile=skip' || '' }}
+        id: install
       - if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with: { path: node_modules, key: '${{ steps.deps.outputs.cache-primary-key }}' }
@@ -208,19 +207,19 @@ jobs:
         uses: actions/cache/save@v4
         with: { path: web/node_modules, key: '${{ steps.webdeps.outputs.cache-primary-key }}' }
       # the pre-commit hook's checks (scripts/precommit.mjs; tests/prUnitTestsWorkflow.test.ts keeps the two in step)
-      - if: matrix.check == 'biome'
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npx biome check --diagnostic-level=error .
-      - if: matrix.check == 'types'
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(fromJSON(needs.plan.outputs.static), 'types') }}
         run: npm run typecheck
-      - if: matrix.check == 'types'
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(fromJSON(needs.plan.outputs.static), 'types') }}
         run: npm run typecheck
         working-directory: web
       # no bug-class lint warning added, and no rule's total in lint/baseline.json raised (docs/bug-prevention/README.md);
       # a pull request branched before the ratchet existed has nothing to run
-      - if: matrix.check == 'ratchet'
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: if [ -f scripts/lint-ratchet.mjs ]; then npm run lint:ratchet -- --base=${{ needs.plan.outputs.base_sha }}; fi
       # Same staged-content policy as pre-commit, applied to the merged tree against current main
-      - if: matrix.check == 'ratchet'
+      - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
 
   # the related tests that run anywhere, round-robin across the planned Linux shards
@@ -228,6 +227,9 @@ jobs:
     needs: plan
     if: needs.plan.outputs.shards != '[]'
     runs-on: ubuntu-latest
+    # the largest planned shard takes up to twelve minutes (FILES_PER_SHARD in scripts/test-shards.mjs); a hung one ends
+    # here instead of holding a Linux runner for the default six hours
+    timeout-minutes: 20
     strategy:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
@@ -293,6 +295,9 @@ jobs:
         run: |
           files=$(node scripts/test-shards.mjs files --changed=${{ needs.plan.outputs.base_sha }} --plan=${{ needs.plan.outputs.digest }} --shard=${{ matrix.shard }}/${{ strategy.job-total }})
           npm run test:coverage -- $MODE $files
+      # this shard's marker beside its packed coverage, which job coverage requires of every planned shard (planParts)
+      - if: needs.plan.outputs.split == 'true'
+        run: ': > coverage/raw/linux-${{ matrix.shard }}.part'
       # public, like the logs: the repository's own scripts' coverage, without their source text (scripts/raw-coverage.mjs).
       # Named for the tree and the plan, so a re-run that planned other tests never merges this attempt's upload
       - if: needs.plan.outputs.split == 'true'
@@ -403,6 +408,7 @@ jobs:
       - run: |
           files=$(node scripts/test-shards.mjs files --changed=${{ needs.plan.outputs.base_sha }} --plan=${{ needs.plan.outputs.digest }} --mac)
           npm run test:coverage -- --raw-out coverage/raw $files
+          : > coverage/raw/mac.part
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-mac
@@ -585,7 +591,7 @@ jobs:
           pattern: coverage-${{ needs.plan.outputs.sha }}-${{ needs.plan.outputs.base_sha }}-${{ needs.plan.outputs.digest }}-*
           path: coverage/raw
           merge-multiple: true
-      - run: node scripts/test-shards.mjs merge --changed=${{ needs.plan.outputs.base_sha }} coverage/raw
+      - run: node scripts/test-shards.mjs merge --changed=${{ needs.plan.outputs.base_sha }} --parts='${{ needs.plan.outputs.parts }}' coverage/raw
 
   # the `unit-tests` status, as soon as the jobs it counts are done: the E2E specs are not among them
   # (docs/unit-coverage.md#e2e-specs). It also waits for job e2e-start, whatever its result, so a head that picked specs
@@ -643,6 +649,9 @@ jobs:
           COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           set -euo pipefail
+          # which part failed, for the sweep's decision records (scripts/sweep-records.mjs): the static checks (whose job
+          # also merges main), or the tests and coverage
+          STATIC_RESULT=$RESULT
           # every job the plan needed counts; one it skipped ran nothing that was needed
           need() { if [ "$1" = true ] && [ "$2" != success ]; then RESULT=$2; fi; }
           need true "$PLAN_RESULT"
@@ -653,7 +662,9 @@ jobs:
           if [ -n "${LOCAL_RUNNER:-}" ] && [ "${LOCAL_OK:-}" != true ]; then RESULT=failure; fi
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
-          else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
+          elif [ "$PLAN_RESULT" != success ]; then state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"
+          elif [ "$STATIC_RESULT" != success ]; then state=failure; description="Failed merged with main $BASE_SHA: merge, static checks or ratchet"
+          else state=failure; description="Failed merged with main $BASE_SHA: unit tests or coverage"; fi
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

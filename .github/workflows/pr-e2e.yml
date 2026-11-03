@@ -286,6 +286,10 @@ jobs:
       # start without it
       - if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The pinned Swift toolchain (about 1 minute), so the E2E setup (tests/e2e/global-setup.ts) builds native/sage-mcp here as
+      # on macOS; without it the build is skipped. docs/unit-coverage.md#swift-on-linux
+      - if: runner.os == 'Linux'
+        run: node scripts/ci-install-swift.mjs
       # one retry, so a timing flake does not fail the pull request (main-e2e still runs them without)
       - name: Run the specs
         env:
@@ -377,6 +381,10 @@ jobs:
       # start without it
       - if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The pinned Swift toolchain (about 1 minute), so the E2E setup (tests/e2e/global-setup.ts) builds native/sage-mcp here as
+      # on macOS; without it the build is skipped. docs/unit-coverage.md#swift-on-linux
+      - if: runner.os == 'Linux'
+        run: node scripts/ci-install-swift.mjs
       # one retry, so a timing flake does not fail the pull request (main-e2e still runs them without)
       - name: Run the specs
         env:

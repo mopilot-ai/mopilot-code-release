@@ -3,8 +3,9 @@ name: PR E2E specs
 # scripts/sync-release-repo.sh copies this file there as .github/workflows/pr-e2e.yml.
 # The fake-based E2E specs a pull request can break (docs/unit-coverage.md#e2e-specs), in a run of their own: job
 # `e2e-start` of pr-unit-tests.yml picks them and starts this workflow with the head and the main commit it tested.
-# The Linux shards post `e2e-specs`, which the merge gate waits for; the macOS ones post `e2e-specs-mac`, which no merge
-# waits for (docs/unit-coverage.md#e2e-specs).
+# The Linux shards post `e2e-specs`, which the merge gate waits for. The specs that need a Mac run after merge, in
+# main-e2e and the nightly full run, so a check never waits for a macOS runner; with repository variable PR_E2E_MAC=on
+# they run here as before and post `e2e-specs-mac`, which no merge waits for (docs/unit-coverage.md#e2e-specs).
 # A run of their own because a newer check of the same head (a retest after main moved, merge-on-green's, one started
 # by hand) cancels the older check's run, and the specs outlast `unit-tests`: in that run they were cancelled too, left
 # `e2e-specs` pending and wasted the macOS minutes they had spent. Here the runs of one pull request queue one behind
@@ -148,6 +149,8 @@ jobs:
       # e2e_matrix with shard `own` (scripts/e2e-carry.mjs), which job e2e runs
       e2e_jobs: ${{ steps.carry.outputs.e2e_jobs }}
       e2e_carried: ${{ steps.carry.outputs.e2e_carried }}
+      # the specs that need a Mac, left to main's runs (scripts/e2e-carry.mjs) unless variable PR_E2E_MAC is `on`
+      e2e_deferred_mac: ${{ steps.carry.outputs.e2e_deferred_mac }}
       # e2e_jobs split by runner kind: job e2e takes the Linux shards, job e2e-mac the macOS ones
       e2e_jobs_linux: ${{ steps.split.outputs.linux }}
       e2e_jobs_mac: ${{ steps.split.outputs.mac }}
@@ -211,6 +214,7 @@ jobs:
           MAIN: ${{ needs.start.outputs.base_sha }}
           SPECS: ${{ inputs.specs }}
           RECORDS: ${{ runner.temp }}/e2e-records.json
+          PR_E2E_MAC: ${{ vars.PR_E2E_MAC }}
         run: node scripts/e2e-carry.mjs
       - id: split
         env:
@@ -442,11 +446,13 @@ jobs:
           SHA: ${{ needs.start.outputs.sha }}
           # the Linux shards' result (`none`: no Linux shard ran); the job's own when it could not be split
           # job e2e is skipped when only macOS specs are left: nothing to run on Linux
-          E2E_RESULT: ${{ steps.kinds.outputs.linux || (needs.e2e.result == 'skipped' && needs.plan.outputs.e2e_run != '' && 'none') || needs.e2e.result }}
+          # and when every spec it picked needs a Mac: those run after merge (e2e_deferred_mac)
+          E2E_RESULT: ${{ steps.kinds.outputs.linux || (needs.e2e.result == 'skipped' && (needs.plan.outputs.e2e_run != '' || needs.plan.outputs.e2e_deferred_mac != '') && 'none') || needs.e2e.result }}
           E2E_RUN: ${{ needs.plan.outputs.e2e_run_linux }}
           E2E_CARRIED: ${{ needs.plan.outputs.e2e_carried }}
           E2E_RUN_ALL: ${{ needs.plan.outputs.e2e_run }}
           NOTE: ${{ steps.kinds.outputs.note }}
+          DEFERRED: ${{ needs.plan.outputs.e2e_deferred_mac }}
         run: |
           set -euo pipefail
           # every spec passed on this head before, and main's newer commits reach none of them (step carry): job e2e skipped
@@ -457,13 +463,16 @@ jobs:
           fi
           # the ones that ran, and how many carried with them
           if [ "$carried" -gt 0 ]; then ran="the E2E specs this change can break, $carried carried from an earlier run"; else ran='the E2E specs this change can break'; fi
+          # the ones that need a Mac run after merge (main-e2e), not here
+          deferred=$(wc -w <<< "${DEFERRED:-}" | tr -d ' ')
+          if [ "$deferred" -gt 0 ]; then later="; $deferred needing a Mac run after merge"; else later=''; fi
           # at most 140 characters; a job that never finished (cancelled, or no runner) is neither a pass nor a stale spec
           # the merge gate waits for this status and holds a failure; `error` (never finished) holds nothing
           case "$E2E_RESULT" in
             carried-linux) state=success; description="Passed: the Linux E2E specs this change can break carried from an earlier run on this head; the macOS ones post e2e-specs-mac" ;;
-            carried) state=success; description="Passed: all $carried E2E specs this change can break carried from an earlier run on this head" ;;
-            success) state=success; description="Passed: $ran, on Linux${NOTE:-}" ;;
-            none) state=success; description='Passed: none of the E2E specs this change can break runs on Linux; the macOS ones post e2e-specs-mac' ;;
+            carried) state=success; description="Passed: all $carried E2E specs this change can break carried from an earlier run on this head${later}" ;;
+            success) state=success; description="Passed: $ran, on Linux${NOTE:-}${later}" ;;
+            none) state=success; description="Passed: none of the E2E specs this change can break runs on Linux${later:-; the macOS ones post e2e-specs-mac}" ;;
             failure) state=failure; description='Failed: an E2E spec this change can break, on Linux; fix it in this pull request before it merges' ;;
             *) state=error; description="Did not finish ($E2E_RESULT): the E2E specs this change can break, on Linux" ;;
           esac

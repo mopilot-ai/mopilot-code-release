@@ -544,9 +544,17 @@ jobs:
     if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
     runs-on: ubuntu-latest
     steps:
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - name: Post the result on the pull request's head commit
         env:
-          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          GH_TOKEN: ${{ steps.ci-app.outputs.token || secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.plan.outputs.sha }}
           BASE_SHA: ${{ needs.plan.outputs.base_sha }}
           RESULT: ${{ needs.static.result }}

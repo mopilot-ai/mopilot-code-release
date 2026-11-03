@@ -54,9 +54,17 @@ jobs:
       - name: Restore the previous sweep's state
         env: { GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}' }
         run: node scripts/sweep-state.mjs "$RUNNER_TEMP/sweep-state"
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - name: Start missing checks, merge on green, start the runs on main when due, keep a watcher running
         env:
-          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
+          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
         # its output also goes to the log the issue below quotes
         run: |
           set -o pipefail
@@ -81,6 +89,7 @@ jobs:
       - name: Release verified main to dogfood
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          STATUS_GH_TOKEN: ${{ steps.ci-app.outputs.token }}
           RELEASE_GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ github.repository }}
           DOGFOOD_RELEASES: ${{ vars.DOGFOOD_RELEASES }}

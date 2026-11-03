@@ -77,10 +77,15 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          # avdmanager writes under $XDG_CONFIG_HOME/.android on the runner but the emulator looks in $ANDROID_AVD_HOME or ~/.android/avd
+          # ("Unknown AVD name [startup]"): name one place for both
+          export ANDROID_AVD_HOME="$HOME/.android/avd"; mkdir -p "$ANDROID_AVD_HOME"
           # no -d: the runner's cmdline-tools know no `pixel_8` ("No device found matching --device pixel_8"), and the default phone profile is enough
           echo no | avdmanager create avd -n startup -k "system-images;android-36;google_apis;x86_64" --force
           # 4 GB as the Mac recipe (scripts/mobile-android-emulator.sh) found enough, and 3 of the runner's 4 cores so adb keeps one
-          config="$HOME/.android/avd/startup.avd/config.ini"
+          # ask avdmanager where it put the AVD rather than assuming
+          config="$(avdmanager list avd | sed -n 's/^ *Path: //p' | head -1)/config.ini"
+          test -f "$config" || { echo "::error::No AVD config at $config"; avdmanager list avd; exit 1; }
           sed -i '/^hw.ramSize/d; /^hw.cpu.ncore/d' "$config"
           printf 'hw.ramSize=4096\nhw.cpu.ncore=3\n' >> "$config"
           grep -E '^hw.(ramSize|cpu.ncore)' "$config"

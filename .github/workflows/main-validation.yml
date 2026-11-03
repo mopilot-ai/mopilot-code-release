@@ -39,8 +39,16 @@ jobs:
       - id: control
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       # RELEASE_GH_TOKEN reads this repository's pull request checks: a scheduled cycle yields to their waiting macOS jobs
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - id: pick
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ inputs.sha }}', FULL: '${{ inputs.full }}' }
         run: node scripts/main-validation-cycle.mjs pick
 
   # retry_follows: a failure here is left to the retry's report, so a flake opens no main-red issue
@@ -110,7 +118,15 @@ jobs:
         with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
         run: node scripts/main-validation-cycle.mjs stop
 
   stop-e2e:
@@ -124,7 +140,15 @@ jobs:
         with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
         run: node scripts/main-validation-cycle.mjs stop
 
   finish:
@@ -137,5 +161,13 @@ jobs:
         with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ needs.pick.outputs.control }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
-      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}' }
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
+      - env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', SHA: '${{ needs.pick.outputs.sha }}' }
         run: node scripts/main-validation-cycle.mjs finish

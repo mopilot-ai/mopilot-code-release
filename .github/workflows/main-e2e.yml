@@ -40,6 +40,8 @@ on:
       only_specs: { required: false, type: string, default: '{}' }
     secrets:
       SOURCE_TOKEN: { required: true }
+      # the CI App's key, which posts the results (docs/unit-coverage.md#who-posts-a-result); without it SOURCE_TOKEN does
+      CI_APP_PRIVATE_KEY: { required: false }
     # the result the report job posted ('' when none was posted), which the paired cycle's retry follows: a job that
     # never got a runner leaves the suite `abandoned`, a result the caller cannot tell from the others
     outputs:
@@ -412,10 +414,18 @@ jobs:
           VERDICTS: ${{ needs.isolate.outputs.verdicts }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node scripts/e2e-quarantine.mjs triage "$RUNNER_TEMP/failed.log"
+      # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
+      # variable CI_APP_ID is set the step is skipped, and if it fails the post still runs: either way with SOURCE_TOKEN,
+      # whose result counts only while the owner's login is trusted.
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - name: Post the result on main's commit
         id: post
         env:
-          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          GH_TOKEN: ${{ steps.ci-app.outputs.token || secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ steps.triage.outputs.result || needs.e2e.result }}
           MODE: ${{ needs.scope.outputs.mode }}
@@ -448,6 +458,7 @@ jobs:
         id: issue
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          STATUS_GH_TOKEN: ${{ steps.ci-app.outputs.token }}
           RETRY_FOLLOWS: ${{ inputs.retry_follows }}
           RED_HOLD: ${{ vars.RED_HOLD }}
           SHA: ${{ needs.pick.outputs.sha }}

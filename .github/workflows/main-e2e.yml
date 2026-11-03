@@ -207,6 +207,10 @@ jobs:
       # start without it
       - if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The pinned Swift toolchain (about 1 minute), so the E2E setup (tests/e2e/global-setup.ts) builds native/sage-mcp here as
+      # on macOS; without it the build is skipped. docs/unit-coverage.md#swift-on-linux
+      - if: runner.os == 'Linux'
+        run: node scripts/ci-install-swift.mjs
       # the whole suite or the specs the scope picked, in as many shards of each kind as it asked for (strategy.job-total
       # would shrink with the shards a retry skips); the Linux shards run the specs that need no Mac, the numbered macOS
       # ones the rest but the specs that take a runner to themselves, which shard `own` runs (E2E_RUNNER, read by
@@ -326,6 +330,10 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The pinned Swift toolchain (about 1 minute), so the E2E setup (tests/e2e/global-setup.ts) builds native/sage-mcp here as
+      # on macOS; without it the build is skipped. docs/unit-coverage.md#swift-on-linux
+      - if: runner.os == 'Linux'
+        run: node scripts/ci-install-swift.mjs
       - name: Run each failing spec alone
         env: { SPECS: '${{ needs.isolate-plan.outputs.specs }}' }
         run: |

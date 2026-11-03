@@ -77,8 +77,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-          echo no | # no -d: the runner's cmdline-tools know no `pixel_8` ("No device found matching --device pixel_8"), and the default phone profile is enough
-          avdmanager create avd -n startup -k "system-images;android-36;google_apis;x86_64" --force
+          # no -d: the runner's cmdline-tools know no `pixel_8` ("No device found matching --device pixel_8"), and the default phone profile is enough
+          echo no | avdmanager create avd -n startup -k "system-images;android-36;google_apis;x86_64" --force
           # 4 GB as the Mac recipe (scripts/mobile-android-emulator.sh) found enough, and 3 of the runner's 4 cores so adb keeps one
           config="$HOME/.android/avd/startup.avd/config.ini"
           sed -i '/^hw.ramSize/d; /^hw.cpu.ncore/d' "$config"

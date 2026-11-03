@@ -38,10 +38,17 @@ on:
   workflow_dispatch:
     inputs:
       pr: { description: 'Pull request number in the source repository', required: true, type: number }
+      # an audit of a run whose macOS job ran on a sealed local runner (docs/local-runner.md): the run's id, the head and
+      # main it tested, its macOS result and the runner's owner. The audit runs that job on GitHub and posts no status.
+      audit_of: { description: 'Run id of the local run to audit (empty: a normal check)', required: false, type: string, default: '' }
+      audit_head: { required: false, type: string, default: '' }
+      audit_base: { required: false, type: string, default: '' }
+      audit_result: { required: false, type: string, default: '' }
+      audit_owner: { required: false, type: string, default: '' }
 permissions: { contents: read }
 concurrency:
-  # a newer run for the same pull request supersedes an older one
-  group: pr-unit-tests-${{ inputs.pr }}
+  # a newer run for the same pull request supersedes an older one; an audit supersedes only an older audit
+  group: pr-unit-tests-${{ inputs.pr }}${{ inputs.audit_of != '' && '-audit' || '' }}
   cancel-in-progress: true
 env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
@@ -65,9 +72,16 @@ jobs:
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', PR: '${{ inputs.pr }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', PR: '${{ inputs.pr }}', AUDIT_HEAD: '${{ inputs.audit_head }}', AUDIT_BASE: '${{ inputs.audit_base }}' }
         run: |
           set -euo pipefail
+          if [ -n "${AUDIT_HEAD:-}" ]; then
+            # an audit (docs/local-runner.md) tests what the local run tested; a head the pull request left has nothing to compare
+            head=$(gh api "repos/$SOURCE_REPO/pulls/$PR" --jq .head.sha)
+            if [ "$head" != "$AUDIT_HEAD" ]; then echo "Pull request $PR moved past $AUDIT_HEAD: nothing to audit."; exit 0; fi
+            { echo "sha=$AUDIT_HEAD"; echo "base=main"; echo "base_sha=$AUDIT_BASE"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # a variable, not a process substitution, so a failed lookup stops the job (set -e)
           # main is the default branch, not the pull request's base: one stacked on another branch is still tested
           # (and its status named) against main, which the merge gate reads (#1766)
@@ -291,10 +305,47 @@ jobs:
           retention-days: 1
 
   # only the related tests that need a real Mac; the rest ran on Linux
-  mac:
+  # where job mac runs: its author's sealed local runner or GitHub's (scripts/local-lane.mjs, docs/local-runner.md), decided
+  # from main's code on a GitHub-hosted runner. If it fails or is skipped, job mac runs on macos-15.
+  route-mac:
     needs: plan
     if: needs.plan.outputs.mac == 'true'
-    runs-on: macos-15
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, issues: read }
+    outputs:
+      runs_on: ${{ steps.route.outputs.runs_on }}
+      runner: ${{ steps.route.outputs.runner }}
+      audit: ${{ steps.route.outputs.audit }}
+      owner: ${{ steps.route.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      # the CI App reads the organization's runners (Self-hosted runners: read); no App, no local lane
+      - id: runners-app
+        if: vars.CI_APP_ID != '' && vars.LOCAL_LANE == 'on'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-organization-self-hosted-runners: read }
+      - id: route
+        env:
+          LOCAL_LANE: ${{ vars.LOCAL_LANE }}
+          LOCAL_RUNNER_OWNERS: ${{ vars.LOCAL_RUNNER_OWNERS }}
+          LOCAL_WAIT_SECONDS: ${{ vars.LOCAL_WAIT_SECONDS }}
+          LOCAL_AUDIT_EVERY: ${{ vars.LOCAL_AUDIT_EVERY }}
+          AUDIT_OF: ${{ inputs.audit_of }}
+          PR: ${{ inputs.pr }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RUNNERS_TOKEN: ${{ steps.runners-app.outputs.token }}
+        run: node scripts/local-lane.mjs route
+
+  mac:
+    needs: [plan, route-mac]
+    if: ${{ !cancelled() && needs.plan.outputs.mac == 'true' }}
+    runs-on: ${{ fromJSON(needs.route-mac.outputs.runs_on || '"macos-15"') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -423,7 +474,7 @@ jobs:
 # to start or was never started: the merge gate reads no status as none picked. No pull request code runs here
   e2e-start:
     needs: plan
-    if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' && inputs.audit_of == '' }}
     runs-on: ubuntu-latest
     # github.token cancels and starts runs of pr-e2e.yml
     permissions: { actions: write }
@@ -539,9 +590,28 @@ jobs:
   # the `unit-tests` status, as soon as the jobs it counts are done: the E2E specs are not among them
   # (docs/unit-coverage.md#e2e-specs). It also waits for job e2e-start, whatever its result, so a head that picked specs
   # shows `e2e-specs` pending before `unit-tests` can let the merge gate merge it
+  # a local result counts only from the runner routing chose (scripts/local-lane.mjs check, docs/local-runner.md)
+  local-check:
+    needs: [mac, route-mac]
+    if: ${{ !cancelled() && needs.route-mac.outputs.runner != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: read }
+    outputs:
+      ok: ${{ steps.local.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: local
+        env: { RUNNER: '${{ needs.route-mac.outputs.runner }}', GITHUB_TOKEN: '${{ github.token }}' }
+        run: node scripts/local-lane.mjs check
+
   report:
-    needs: [plan, static, unit, mac, rust, coverage, e2e-start]
-    if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
+    needs: [plan, static, unit, mac, rust, coverage, route-mac, local-check, e2e-start]
+    # an audit (docs/local-runner.md) posts no status: job audit compares it with the local run
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' && inputs.audit_of == '' }}
     runs-on: ubuntu-latest
     steps:
       # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
@@ -555,6 +625,10 @@ jobs:
       - name: Post the result on the pull request's head commit
         env:
           GH_TOKEN: ${{ steps.ci-app.outputs.token || secrets.SOURCE_TOKEN }}
+          # the runner routing chose for job mac ('' for GitHub's), and job local-check's answer that it ran there: a local
+          # result counts only on an explicit yes, so a check that failed or never ran fails it
+          LOCAL_RUNNER: ${{ needs.route-mac.outputs.runner }}
+          LOCAL_OK: ${{ needs.local-check.outputs.ok }}
           SHA: ${{ needs.plan.outputs.sha }}
           BASE_SHA: ${{ needs.plan.outputs.base_sha }}
           RESULT: ${{ needs.static.result }}
@@ -576,6 +650,7 @@ jobs:
           need "$MAC" "$MAC_RESULT"
           need "$RUST" "$RUST_RESULT"
           need "$SPLIT" "$COVERAGE_RESULT"
+          if [ -n "${LOCAL_RUNNER:-}" ] && [ "${LOCAL_OK:-}" != true ]; then RESULT=failure; fi
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           else state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"; fi
@@ -590,3 +665,39 @@ jobs:
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"
+
+  # one sampled local run in LOCAL_AUDIT_EVERY is run again on GitHub's runners for the same head and main; the audit's
+  # own job here compares the two macOS results and quarantines the runner's owner on a local pass that failed on GitHub
+  audit:
+    needs: [plan, mac, route-mac, local-check, report]
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' && (inputs.audit_of != '' || (needs.route-mac.outputs.audit == 'true' && needs.local-check.outputs.ok == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: write, issues: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Audit this local run on GitHub's runners
+        if: inputs.audit_of == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          MAC_RESULT: ${{ needs.mac.result }}
+          OWNER: ${{ needs.route-mac.outputs.owner }}
+        run: |
+          gh workflow run pr-unit-tests.yml -R "$GITHUB_REPOSITORY" -f pr="$PR" -f audit_of="$GITHUB_RUN_ID" \
+            -f audit_head="$SHA" -f audit_base="$BASE_SHA" -f audit_result="$MAC_RESULT" -f audit_owner="$OWNER"
+      - name: Compare with the local run
+        if: inputs.audit_of != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AUDIT_OF: ${{ inputs.audit_of }}
+          LOCAL_RESULT: ${{ inputs.audit_result }}
+          HOSTED_RESULT: ${{ needs.mac.result }}
+          OWNER: ${{ inputs.audit_owner }}
+          PR: ${{ inputs.pr }}
+        run: node scripts/local-lane.mjs audit

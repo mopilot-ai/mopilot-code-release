@@ -15,8 +15,13 @@ name: Sweep
 # workflow merged on main does nothing here until copied, and a release refuses a release.yml other than the one it
 # builds. Sync also retains historical release.yml versions, so a newer copy never retires a tested source's recipe.
 #
+# Variable CI_APP_ID and secret CI_APP_PRIVATE_KEY: the CI App (mopilot-ci), whose installation token the scripts mint
+# for every source-repository call (scripts/gh.mjs appGh), so the sweep spends the App's rate limit, not the one the
+# owner's token shares with every agent (docs/unit-coverage.md#sweep). That needs the App to have Contents, Pull
+# requests, Issues, Commit statuses and Workflows: write on the source repository; until it does, or when minting
+# fails, the calls use SOURCE_TOKEN, and the log says which.
 # Secret SOURCE_TOKEN: the token the other workflows use (Contents read and write, Commit statuses read and write,
-# Pull requests read, Issues read and write). github.token starts the other workflows here.
+# Pull requests read, Issues read and write), and the fallback above. github.token starts the other workflows here.
 # Secret WORKFLOW_SYNC_TOKEN: a fine-grained token with Contents and Workflows read and write on this repository only,
 # for the copy (github.token cannot change workflows). Without it the sweep warns instead of copying.
 run-name: ${{ github.event_name == 'workflow_run' && format('Sweep after {0}', github.event.workflow_run.name) || 'Sweep' }}
@@ -65,7 +70,7 @@ jobs:
         with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - name: Start missing checks, merge on green, start the runs on main when due, keep a watcher running
         env:
-          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
+          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
         # its output also goes to the log the issue below quotes
         run: |
           set -o pipefail
@@ -90,6 +95,8 @@ jobs:
       - name: Release verified main to dogfood
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          CI_APP_ID: ${{ vars.CI_APP_ID }}
+          CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
           STATUS_GH_TOKEN: ${{ steps.ci-app.outputs.token }}
           RELEASE_GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ github.repository }}
@@ -101,11 +108,14 @@ jobs:
       # A sweep posts no commit status, so a failing one is reported here: two failed sweeps in a row open the main-red
       # issue "Main is red: sweep", and the next sweep that passes closes it (scripts/sweep-red-issue.mjs). A sweep that
       # crashed on a missing package stopped every check and merge for 7.5 hours while main read green. Like the sweep,
-      # it runs with no installed packages (tests/ciDependencies.test.ts). Needs SOURCE_TOKEN to have Issues read and write.
+      # it runs with no installed packages (tests/ciDependencies.test.ts). Needs the CI App, or SOURCE_TOKEN, to have Issues
+      # read and write.
       - name: Open, update or close the sweep's main-red issue
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          CI_APP_ID: ${{ vars.CI_APP_ID }}
+          CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
           RELEASE_GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ github.repository }}
           STATE: ${{ job.status }}

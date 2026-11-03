@@ -1,0 +1,154 @@
+name: Android startup
+# Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free); scripts/sync-release-repo.sh
+# copies this file there as .github/workflows/android-startup.yml. By hand only: it builds the phone app's release APK for x86_64 at two
+# commits of the source repository, installs each on an Android emulator (API 36, google_apis, x86_64, hardware-accelerated by the Linux
+# runner's KVM) and measures three cold starts of each (`am start -W`, then how long the Welcome screen takes to draw), keeping the ANR
+# reports, so a startup regression between two commits shows without a developer's Mac. Full commit ids (the logs here are public and a
+# branch name would name private work):
+#   gh workflow run android-startup.yml -R mopilot-ai/mopilot-code-release -f sha=<commit to check> -f base_sha=<an older commit to compare>
+# Secret SOURCE_TOKEN: the token pr-unit-tests.yml uses (Contents read is all this workflow needs). Run logs and artifacts here are
+# public: the APK is never uploaded, and the artifact holds only crash, ANR and launch lines of the app (a narrow logcat filter that leaves
+# out the JavaScript's own output), the ANR reports of the app process and the timings; it is kept one day. The build's own output (Metro,
+# Gradle) and the checkout's last-commit line are in the public log as in mobile-release-checks.yml, so measure commits whose merge
+# subjects you are content to show. The two commits run on two runners: a difference of a few hundred milliseconds is noise, a hang or
+# an ANR on one side and not the other is the finding.
+run-name: ${{ format('Android startup {0} vs {1}', inputs.sha, inputs.base_sha) }}
+on:
+  workflow_dispatch:
+    inputs:
+      sha: { description: 'Full commit id of the source repository to measure', required: true, type: string }
+      base_sha: { description: 'Full commit id to compare it with', required: true, type: string }
+permissions: { contents: read }
+
+jobs:
+  startup:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [new, base]
+    steps:
+      - name: Check the inputs
+        env: { SHA: '${{ inputs.sha }}', BASE: '${{ inputs.base_sha }}' }
+        run: |
+          set -euo pipefail
+          for id in "$SHA" "$BASE"; do [[ "$id" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected full commit ids"; exit 1; }; done
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ matrix.which == 'new' && inputs.sha || inputs.base_sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Install the phone app's dependencies
+        run: npm ci --prefix mobile
+      - name: Android SDK pieces React Native builds with, and the emulator image
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          # the pins React Native reads (node_modules/react-native/gradle/libs.versions.toml), so a bump needs no edit here
+          toml=mobile/node_modules/react-native/gradle/libs.versions.toml
+          pin() { sed -n "s/^$1 = \"\(.*\)\"/\1/p" "$toml"; }
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          # the platform itself is fetched by Gradle (its package name is android-37.0 for 37 but android-36 for 36)
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "build-tools;$(pin buildTools)" "ndk;$(pin ndkVersion)" \
+            "cmake;3.22.1" "system-images;android-36;google_apis;x86_64" > /dev/null
+          df -h / | tail -1
+      - name: Build the release APK (x86_64 only)
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          npx expo prebuild --platform android --no-install --clean
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          (cd android && ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 -Dorg.gradle.jvmargs='-Xmx4g -XX:MaxMetaspaceSize=1g' --console=plain --no-daemon)
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/app.apk"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Boot the emulator
+        run: |
+          set -euo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          echo no | avdmanager create avd -n startup -k "system-images;android-36;google_apis;x86_64" -d pixel_8 --force
+          # 4 GB as the Mac recipe (scripts/mobile-android-emulator.sh) found enough, and 3 of the runner's 4 cores so adb keeps one
+          config="$HOME/.android/avd/startup.avd/config.ini"
+          sed -i '/^hw.ramSize/d; /^hw.cpu.ncore/d' "$config"
+          printf 'hw.ramSize=4096\nhw.cpu.ncore=3\n' >> "$config"
+          grep -E '^hw.(ramSize|cpu.ncore)' "$config"
+          nohup emulator -avd startup -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          fail() { echo "::error::$1"; tail -40 "$RUNNER_TEMP/emulator.log"; exit 1; }
+          timeout 120 adb wait-for-device || fail "No emulator appeared (is KVM on?)"
+          timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = 1 ]; do sleep 5; done' || fail "The emulator did not finish booting"
+          timeout 120 bash -c 'until adb shell pm path android > /dev/null 2>&1; do sleep 2; done' || fail "The package manager never came up"
+          for scale in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global "$scale" 0; done
+          adb install -r "$RUNNER_TEMP/app.apk"
+      - name: Measure three cold starts
+        timeout-minutes: 25
+        env: { WHICH: '${{ matrix.which }}', SHA: '${{ matrix.which == ''new'' && inputs.sha || inputs.base_sha }}' }
+        run: |
+          set -uo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          out="$RUNNER_TEMP/startup-$WHICH"; mkdir -p "$out"
+          adb root > /dev/null; adb wait-for-device; sleep 2
+          bad=0
+          echo 'run,verdict,TotalTime_ms,Welcome_drawn_s,alive,ANRs,crashes' > "$out/timings.csv"
+          for i in 1 2 3; do
+            adb shell am force-stop ai.mopilot.remote; adb shell 'rm -rf /data/anr/*' ; adb logcat -c
+            start=$(adb shell am start -W -n ai.mopilot.remote/.MainActivity)
+            status=$(printf '%s' "$start" | sed -n 's/^Status: //p' | tr -d '\r')
+            total=$(printf '%s' "$start" | sed -n 's/^TotalTime: //p' | tr -d '\r')
+            # one tap after launch: an app whose main thread is stuck leaves it undelivered, and Android then raises the input ANR a
+            # healthy start never does (without input there is no ANR to see even when the main thread hangs)
+            sleep 3; adb shell input tap 540 1200
+            # the Welcome screen's button draws once the JavaScript has run and rendered: seconds until the dump of the app's own window
+            # holds it, up to 90 by the clock (a dump takes seconds under software rendering)
+            drawn=none; t0=$(date +%s)
+            while [ $(( $(date +%s) - t0 )) -lt 90 ]; do
+              adb shell rm -f /sdcard/ui.xml
+              adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1
+              if adb shell grep -q 'text=\"Sign in\"' /sdcard/ui.xml 2>/dev/null && adb shell grep -q 'package=\"ai.mopilot.remote\"' /sdcard/ui.xml 2>/dev/null; then drawn=$(( $(date +%s) - t0 )); break; fi
+              sleep 2
+            done
+            alive=$(adb shell pidof ai.mopilot.remote | wc -w)
+            adb logcat -d > "$RUNNER_TEMP/logcat-$i.txt"
+            anr=$(grep -c "ANR in ai.mopilot.remote" "$RUNNER_TEMP/logcat-$i.txt" || true)
+            crashes=$(grep -c "FATAL EXCEPTION" "$RUNNER_TEMP/logcat-$i.txt" || true)
+            # crash, ANR and launch lines of the app only; the JavaScript's own output (console.*, error messages, stack frames) is left out
+            grep -E 'FATAL EXCEPTION|AndroidRuntime.*(Exception|Error)|ANR in ai\.mopilot\.remote|Process ai\.mopilot\.remote .*(died|crash)|(Displayed|START).*ai\.mopilot\.remote|SoLoader.*(couldn.t find|UnsatisfiedLink)|Killing .*ai\.mopilot\.remote' "$RUNNER_TEMP/logcat-$i.txt" | cut -c1-240 | head -100 > "$out/startup-$i.txt" || true
+            rm -f "$RUNNER_TEMP/logcat-$i.txt"
+            mkdir -p "$out/anr-$i"; adb pull /data/anr "$out/anr-$i" > /dev/null 2>&1 || true
+            find "$out/anr-$i" -type f -size +512k -delete
+            if [ "$crashes" != 0 ]; then verdict=crash
+            elif [ "$anr" != 0 ]; then verdict=anr
+            elif [ "$alive" = 0 ]; then verdict=died
+            elif [ "$drawn" = none ] || [ "$status" != ok ]; then verdict=hang
+            else verdict=ok; fi
+            [ "$verdict" = ok ] || bad=1
+            printf '%s,%s,%s,%s,%s,%s,%s\n' "$i" "$verdict" "${total:-none}" "$drawn" "$alive" "$anr" "$crashes" >> "$out/timings.csv"
+            echo "run $i: $verdict: am start -W Status=${status:-none} TotalTime=${total:-none} ms, Welcome drawn after ${drawn}s, process alive=$alive, ANRs=$anr, crashes=$crashes"
+          done
+          {
+            echo "### $WHICH ($SHA)"
+            echo '| run | verdict | TotalTime ms | Welcome drawn (s) | alive | ANRs | crashes |'
+            echo '| --- | --- | --- | --- | --- | --- | --- |'
+            tail -n +2 "$out/timings.csv" | sed 's/,/ | /g; s/^/| /; s/$/ |/'
+            echo
+            echo 'Two runners: a few hundred milliseconds between the two commits is noise; a hang, ANR or crash on one only is the finding.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # a run that did not start cleanly fails the job (the artifact below is uploaded anyway)
+          [ "$bad" = 0 ] || { echo "::error::At least one of the three starts of the $WHICH commit did not start cleanly"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-startup-${{ matrix.which }}
+          path: ${{ runner.temp }}/startup-${{ matrix.which }}
+          retention-days: 1
+          if-no-files-found: warn

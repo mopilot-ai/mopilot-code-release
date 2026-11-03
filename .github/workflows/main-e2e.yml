@@ -2,7 +2,7 @@ name: Main E2E
 # Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
 # main-unit-tests.yml beside it; scripts/sync-release-repo.sh copies this file there as
 # .github/workflows/main-e2e.yml.
-# main-validation.yml runs this suite and the unit suite against one captured SHA, normally every 15 minutes.
+# main-validation.yml runs this suite and the unit suite against one captured SHA, back to back while main has commits without a result.
 # Job `scope` (scripts/main-e2e-scope.mjs) picks what to test: only the specs the commits since main's last green run reach
 # (the selection the PR check uses), or the whole suite whenever that cannot be trusted and once a night
 # (docs/unit-coverage.md#scoped-e2e-and-the-nightly-full-run). A scoped result says so in its description.

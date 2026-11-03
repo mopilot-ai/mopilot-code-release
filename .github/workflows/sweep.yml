@@ -70,7 +70,7 @@ jobs:
         with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
       - name: Start missing checks, merge on green, start the runs on main when due, keep a watcher running
         env:
-          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
+          { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', STATUS_GH_TOKEN: '${{ steps.ci-app.outputs.token }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', SWEEP_STATE: '${{ runner.temp }}/sweep-state/state.json', CULPRIT_STATE: '${{ runner.temp }}/sweep-state/culprit.json', CULPRIT_SEARCH: '${{ vars.CULPRIT_SEARCH }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}', CHECK_INFLIGHT: '${{ vars.CHECK_INFLIGHT }}', CHECK_STARVED_MINUTES: '${{ vars.CHECK_STARVED_MINUTES }}', MERGE_TRAIN: '${{ vars.MERGE_TRAIN }}', RED_HOLD: '${{ vars.RED_HOLD }}' }
         # its output also goes to the log the issue below quotes
         run: |
           set -o pipefail
@@ -80,7 +80,14 @@ jobs:
       - name: Keep this sweep's state for the next one
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
-        with: { name: sweep-state, path: '${{ runner.temp }}/sweep-state/state.json', retention-days: 1, if-no-files-found: ignore }
+        # state.json: the merge snapshot and decision records; culprit.json: the culprit searches (scripts/culprit-search.mjs)
+        with:
+          name: sweep-state
+          path: |
+            ${{ runner.temp }}/sweep-state/state.json
+            ${{ runner.temp }}/sweep-state/culprit.json
+          retention-days: 1
+          if-no-files-found: ignore
       # after the merges above, and even when a step of the sweep failed; main as it is now, fetched again by the script
       - name: Copy main's workflows here
         if: ${{ !cancelled() && env.HAS_SYNC_TOKEN == 'true' }}

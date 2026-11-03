@@ -92,7 +92,7 @@ jobs:
     # scripts/ci-cuj.mjs finds each shard's job and artifact by this index
     name: shard ${{ matrix.index }}
     # the owner's Mac mini or GitHub's macOS runner, as job route decides (docs/mini-runner.md)
-    runs-on: ${{ fromJSON(needs.route.outputs.runs_on || '"macos-15"') }}
+    runs-on: macos-15-intel
     timeout-minutes: 90
     strategy:
       fail-fast: false

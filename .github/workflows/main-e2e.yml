@@ -35,6 +35,9 @@ on:
       retry_follows: { required: false, type: boolean, default: false }
       # matrix exclusions, e.g. [{"shard": 1}], for shards that already passed on this SHA in the calling run
       skip_shards: { required: false, type: string, default: '[]' }
+      # {"<shard>": ["tests/e2e/x.spec.ts", ...]}: the spec files a retry runs in a shard that failed only in them, in place of
+      # the shard's whole share (scripts/main-e2e-retry-shards.mjs); a shard it does not name runs whole
+      only_specs: { required: false, type: string, default: '{}' }
     secrets:
       SOURCE_TOKEN: { required: true }
     # the result the report job posted ('' when none was posted), which the paired cycle's retry follows: a job that
@@ -214,6 +217,7 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ needs.scope.outputs.count || 8 }}
           MAC_COUNT: ${{ needs.scope.outputs.mac_count }}
           LINUX_COUNT: ${{ needs.scope.outputs.linux_count }}
+          ONLY: ${{ inputs.only_specs }}
         run: |
           set -euo pipefail
           if [ "$PART" = own ]; then
@@ -230,7 +234,17 @@ jobs:
           fi
           # Linux runners have no display: xvfb-run gives the run a virtual one
           if [ "$RUNNER_OS" = Linux ]; then npx=(xvfb-run -a npx); else npx=(npx); fi
-          if [ "$MODE" = scoped ]; then
+          # a retry of a shard that failed only in some specs runs those files and not the shard's share again (the runner
+          # filter above still applies); an unreadable or empty entry leaves the shard whole
+          only=$(printf '%s' "${ONLY:-}" | jq -r --arg shard "$PART" '.[$shard] // [] | join(" ")' 2>/dev/null || true)
+          if [ -n "$only" ]; then
+            for spec in $only; do
+              [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
+            done
+            echo "Retrying only the spec files that failed in shard $PART: $only"
+            # word splitting of $only is the point: one argument per spec path, each checked above
+            "${npx[@]}" playwright test -c tests/e2e --pass-with-no-tests $only
+          elif [ "$MODE" = scoped ]; then
             for spec in $SPECS; do
               [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
             done

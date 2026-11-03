@@ -5,12 +5,15 @@ name: Main reverify
 # is newer than the red one: it re-runs only the failing specs or unit test files the main-red issue names and posts
 # `<context>-reverify` there. The merge gate stops holding merges when it passes (docs/unit-coverage.md#targeted-re-verify);
 # the full paired cycle (main-validation.yml) still runs on main and decides.
+# With purpose=bisect, a culprit search (scripts/culprit-search.mjs) runs the same files on a candidate commit and the
+# report posts `<context>-bisect` there instead, its description naming the search's run; the merge gate and releases
+# never read it (docs/unit-coverage.md#culprit-search).
 #   gh workflow run main-reverify.yml -R mopilot-ai/mopilot-code-release -f sha=<main commit> -f context=main-e2e \
 #     -f red=<red commit> -f files='tests/e2e/a.spec.ts tests/e2e/b.spec.ts'
 #
 # Secret SOURCE_TOKEN: the token main-e2e.yml uses (Contents read, Commit statuses read and write, Issues read and
 # write). The inputs carry commit ids and test paths only, as ci-cuj.yml's do; the logs show the list reporter.
-run-name: ${{ format('Re-run the failing {0} tests on main at {1}', inputs.context, inputs.sha) }}
+run-name: "${{ inputs.purpose == 'bisect' && format('Bisect run {0}: the failing {1} tests at {2}', inputs.run, inputs.context, inputs.sha) || format('Re-run the failing {0} tests on main at {1}', inputs.context, inputs.sha) }}"
 on:
   workflow_dispatch:
     inputs:
@@ -18,10 +21,13 @@ on:
       context: { description: 'The red run on main: main-e2e or main-unit-tests', required: true, type: string }
       red: { description: 'Full commit the run failed on', required: true, type: string }
       files: { description: 'Space-separated failing spec or test files', required: true, type: string }
+      purpose: { description: 'reverify (a fix on main) or bisect (a culprit search)', required: false, default: reverify, type: choice, options: [reverify, bisect] }
+      run: { description: "A bisect: the search's run id", required: false, default: '', type: string }
 permissions: { contents: read }
 concurrency:
-  # one per commit and run; a second start for the same pair waits instead of cancelling one already testing
-  group: main-reverify-${{ inputs.context }}-${{ inputs.sha }}
+  # one per commit and run; a second start for the same pair waits instead of cancelling one already testing. Each
+  # bisect run has its own group: three runs on one commit would otherwise replace each other while pending
+  group: main-reverify-${{ inputs.context }}-${{ inputs.sha }}${{ inputs.purpose == 'bisect' && format('-bisect-{0}', inputs.run) || '' }}
   cancel-in-progress: false
 env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
@@ -39,17 +45,23 @@ jobs:
       mac: ${{ steps.plan.outputs.mac }}
     steps:
       - name: Check the inputs
-        env: { SHA: '${{ inputs.sha }}', RED: '${{ inputs.red }}' }
+        env: { SHA: '${{ inputs.sha }}', RED: '${{ inputs.red }}', PURPOSE: '${{ inputs.purpose }}', RUN: '${{ inputs.run }}' }
         run: |
           set -euo pipefail
           [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$RED" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected full commit ids"; exit 1; }
+          [[ "$PURPOSE" != bisect || "$RUN" =~ ^[0-9]+-[0-9a-f]{12}-[0-9]+$ ]] || { echo "::error::Expected a bisect run id"; exit 1; }
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      # a bisect checks out an older commit, whose own copy of the script predates bisects: the plan runs main's copy,
+      # on that commit's files (its working directory)
+      - if: inputs.purpose == 'bisect'
+        uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, path: .ci-main }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - id: plan
-        env: { CONTEXT: '${{ inputs.context }}', FILES: '${{ inputs.files }}' }
-        run: node scripts/main-reverify.mjs plan
+        env: { CONTEXT: '${{ inputs.context }}', FILES: '${{ inputs.files }}', PURPOSE: '${{ inputs.purpose }}' }
+        run: node ${{ inputs.purpose == 'bisect' && '.ci-main/' || '' }}scripts/main-reverify.mjs plan
 
   e2e:
     needs: plan
@@ -128,8 +140,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # a bisect's report is main's copy of the script, as its plan was
       - uses: actions/checkout@v4
-        with: { repository: '${{ vars.SOURCE_REPO }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: "${{ inputs.purpose == 'bisect' && 'main' || inputs.sha }}", token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       # the CI App's token: a result counts only when the App posts it (docs/unit-coverage.md#who-posts-a-result). Until
@@ -147,6 +160,8 @@ jobs:
           SHA: ${{ inputs.sha }}
           RED: ${{ inputs.red }}
           FILES: ${{ inputs.files }}
+          PURPOSE: ${{ inputs.purpose }}
+          RUN: ${{ inputs.run }}
           OK: ${{ needs.plan.outputs.ok }}
           WHY: ${{ needs.plan.outputs.why }}
           RESULTS: ${{ needs.e2e.result }} ${{ needs.unit.result }} ${{ needs.mac.result }}

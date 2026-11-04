@@ -1,0 +1,201 @@
+name: Windows ACP validation
+# Runs in the public release repository on a clean Windows runner, for one source commit (MoPilot Code's
+# basic tier on Windows). Builds the Rust core and sage-mcp.exe, runs the focused tests there, installs ACP agents from
+# npm, puts each through the app's real admission probe with the tool socket and sage-mcp, and runs one prompt that
+# calls a MoPilot Code tool through it. It publishes nothing.
+run-name: Windows ACP wbt-a7468bd20c-1793755513
+on:
+  push:
+    branches: ['win-validation/wbt-a7468bd20c-1793755513']
+permissions: { contents: read }
+jobs:
+  acp:
+    if: vars.SOURCE_REPO != ''
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: a7468bd20c23ff927fe30fb93902cd111a875736
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci --ignore-scripts > "$RUNNER_TEMP/npm-ci.log" 2>&1 || { tail -50 "$RUNNER_TEMP/npm-ci.log"; exit 1; }
+      - name: Build the Rust core and sage-mcp.exe, and test sage-mcp on Windows
+        working-directory: core
+        run: |
+          set -euo pipefail
+          rustup toolchain install
+          cargo build --release --locked -p node -p sage-mcp
+          cargo test --locked -p sage-mcp
+          ls -la target/release/sage-mcp.exe target/release/mopilot_core.dll
+      - name: The focused unit tests, on Windows
+        run: node --test --test-reporter=spec --experimental-test-module-mocks --import ./tests/support/register.ts --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/sageMcpWindows.test.ts tests/winbin.test.ts tests/buildCore.test.ts tests/flagsCoverage.test.ts
+      - name: Install ACP agents from npm
+        run: |
+          for p in opencode-ai @kilocode/cli @mimo-ai/cli @qwen-code/qwen-code @google/gemini-cli @moonshot-ai/kimi-code @deepseek-ai/dsh cline @augmentcode/auggie @tencent-ai/codebuddy-code droid @xai-official/grok @qoder-ai/qodercli @github/copilot autohand-cli; do
+            if npm install -g "$p" > "$RUNNER_TEMP/npm-agent.log" 2>&1; then echo "installed $p"; else echo "::warning::$p did not install"; tail -5 "$RUNNER_TEMP/npm-agent.log"; fi
+          done
+      - name: Write the checker
+        run: |
+          cat > "$RUNNER_TEMP/acp-check.mjs" <<'JS'
+          // Windows validation of the basic tier (run from a checkout of the source commit, on a clean runner): every ACP agent in
+          // the catalog that is installed here goes through the app's real admission probe (electron/harness/admission.cjs) with
+          // the real tool socket, session channel and the Rust sage-mcp; then one admitted agent runs a prompt that calls a
+          // MoPilot Code tool through that bridge and answers. Writes acp-check.json; exits 1 unless one agent answered with the tool.
+          import { createRequire } from 'node:module';
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+
+          const require = createRequire(path.resolve('package.json'));
+          const { ACP_IDS, ACP_CATALOG } = await import(path.resolve('shared/harnessCatalog.mjs'));
+          const acpQuirks = require('./electron/harness/quirks/index.cjs');
+          const { resolveBasic } = require('./electron/harness/detect.cjs');
+          const shellEnv = require('./electron/platform/env.cjs');
+          const { probe } = require('./electron/harness/admission.cjs');
+          const { AcpAgent } = require('./electron/harness/acp.cjs');
+          const { ToolSessions } = require('./electron/capabilities/contract/session.cjs');
+          const { Registry } = require('./electron/capabilities/contract/registry.cjs');
+          const { ToolSocket, sageMcpPath } = require('./electron/capabilities/mcp/socket.cjs');
+          const { SessionMcp } = require('./electron/capabilities/channels/sessionMcp.cjs');
+          const { core } = require('./electron/platform/core.cjs');
+
+          const MARK = `WINDOWS-TOOLS-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+          const evidence = { platform: process.platform, arch: process.arch, node: process.version, core: !!core(), mark: MARK };
+          const sageMcp = sageMcpPath({});
+          evidence.sageMcp = { path: sageMcp, exists: fs.existsSync(sageMcp) };
+
+          const sessions = new ToolSessions();
+          const registry = new Registry();
+          const toolCalls = [];
+          registry.register({
+            name: 'mopilot_windows_check',
+            description: 'Returns the check word for this run. Call it when asked for the check word.',
+            schema: { type: 'object', properties: {} },
+            policy: 'observe',
+            handler: (_args, ctx) => (toolCalls.push({ at: Date.now(), chatId: ctx?.chatId ?? null }), MARK),
+          });
+          const socket = new ToolSocket({ sessions, registry });
+          const tools = new SessionMcp({ sessions, socket, command: sageMcp });
+          const socketAt = await socket.listen();
+          evidence.socket = socketAt;
+          const rejected = [];
+          socket.on('rejected', (e) => rejected.push(e.reason));
+
+          const env = () => shellEnv.childEnv();
+          const o = {
+            quirks: acpQuirks.quirks,
+            resolveBin: (id) => resolveBasic(id, { which: (b) => shellEnv.which(b) }),
+            env,
+            tools,
+            dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'mopilot-acp-data-')),
+          };
+
+          evidence.admission = [];
+          for (const id of ACP_IDS) {
+            const bin = o.resolveBin(id);
+            if (!bin) {
+              evidence.admission.push({ id, enabled: ACP_CATALOG[id].enabled, state: 'missing' });
+              continue;
+            }
+            const started = Date.now();
+            const r = await probe(id, o);
+            const row = { id, enabled: ACP_CATALOG[id].enabled, state: r.state, reason: r.reason, bin, version: r.version, ms: Date.now() - started };
+            evidence.admission.push(row);
+            console.log(`${id.padEnd(13)} ${r.state.padEnd(11)} ${r.version ?? ''} ${r.reason ?? ''}`);
+          }
+          evidence.rejectedPeers = rejected;
+
+          /** One prompt on `id`, as AcpHost starts a chat: its quirks' launch and env, the tools in session/new, a model it can run. */
+          async function turn(id) {
+            const q = acpQuirks.quirks(id);
+            const bin = o.resolveBin(id);
+            const base = { ...env(), ...(q.env ?? {}) };
+            const launch = q.launch ? await q.launch({ bin, env: base, quirks: q, dataDir: o.dataDir }) : { args: q.args ?? [], env: {} };
+            const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'mopilot-acp-turn-'));
+            const text = [];
+            const updates = [];
+            const agent = new AcpAgent({
+              harness: id,
+              command: bin,
+              args: launch.args ?? [],
+              env: { ...base, ...(launch.env ?? {}) },
+              cwd,
+              onRequest: async (method, params) => {
+                if (method === 'session/request_permission') {
+                  const allow = params.options?.find((x) => x.kind === 'allow_once') ?? params.options?.[0];
+                  return { outcome: { outcome: 'selected', optionId: allow?.optionId } };
+                }
+                throw Object.assign(new Error(`not served: ${method}`), { code: -32601 });
+              },
+              onNotification: (method, params) => {
+                if (method !== 'session/update') return;
+                const u = params.update;
+                updates.push(u.sessionUpdate);
+                if (u.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text') text.push(u.content.text);
+              },
+            });
+            const out = { id, startedAt: Date.now() };
+            try {
+              agent.start();
+              await agent.initialize();
+              const key = `acp:${id}:check`;
+              const prepared = await tools.prepare(key, { harnessPid: agent.pid, chatId: 'windows-check' });
+              const session = await agent.request('session/new', { cwd, mcpServers: prepared.mcpServers });
+              out.admitted = await tools.admission(key);
+              const models = session.configOptions?.find((c) => c.category === 'model' || c.id === 'model');
+              const options = (models?.options ?? []).flatMap((x) => x.options ?? [x]);
+              const free = options.find((x) => /free|big-pickle/i.test(`${x.value} ${x.name}`));
+              out.model = free?.value ?? models?.currentValue ?? session.models?.currentModelId ?? null;
+              if (free && models) await agent.request('session/set_config_option', { sessionId: session.sessionId, configId: models.id, value: free.value });
+              const prompt = `Call the MCP tool named mopilot_windows_check (it takes no arguments) and then reply with exactly the word it returns, nothing else.`;
+              const result = await agent.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: prompt }] }, { timeoutMs: 240_000 });
+              out.stopReason = result?.stopReason ?? null;
+            } catch (e) {
+              out.error = String(e?.message ?? e);
+              out.stderr = agent.exited?.stderr?.split('\n').slice(-5).join('\n') ?? null;
+            } finally {
+              tools.end(`acp:${id}:check`);
+              agent.kill();
+            }
+            out.answer = text.join('').trim();
+            out.updates = [...new Set(updates)];
+            out.toolCalls = toolCalls.length;
+            out.answered = out.answer.includes(MARK) && toolCalls.length > 0;
+            out.ms = Date.now() - out.startedAt;
+            return out;
+          }
+
+          evidence.turns = [];
+          const admitted = evidence.admission.filter((r) => r.state === 'admitted').map((r) => r.id);
+          for (const id of ['opencode', 'kilo', 'mimo', ...admitted.filter((x) => !['opencode', 'kilo', 'mimo'].includes(x))]) {
+            if (!admitted.includes(id)) continue;
+            const t = await turn(id);
+            evidence.turns.push(t);
+            console.log(`turn ${id}: answered=${t.answered} model=${t.model} stop=${t.stopReason} tools=${t.toolCalls} answer=${JSON.stringify(t.answer.slice(0, 80))}${t.error ? ` error=${t.error}` : ''}`);
+            if (t.answered) break;
+          }
+          socket.close();
+          fs.writeFileSync('acp-check.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          const ok = evidence.sageMcp.exists && evidence.turns.some((t) => t.answered);
+          console.log(ok ? 'OK: an ACP agent answered through MoPilot Code tools on this machine' : 'FAILED: no agent answered with the tool');
+          process.exit(ok ? 0 : 1);
+          JS
+      - name: Admit the agents and run one prompt through MoPilot Code's tools
+        shell: pwsh
+        run: |
+          node "$env:RUNNER_TEMP/acp-check.mjs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: acp-check
+          path: acp-check.json
+          retention-days: 7
+          if-no-files-found: warn

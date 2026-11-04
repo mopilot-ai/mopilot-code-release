@@ -2,8 +2,8 @@ name: CUJ specs
 # Runs in the public release repository (mopilot-ai/mopilot-code-release, where Actions minutes are free), like
 # main-e2e.yml beside it; scripts/sync-release-repo.sh copies this file there as .github/workflows/ci-cuj.yml.
 # Agents start it with scripts/ci-cuj.mjs, which picks a pushed commit of the source repository and the end-to-end
-# (fake-based CUJ/E2E) specs to run, splits them into shards, waits, and prints each spec's result. Each shard is a clean
-# macOS runner, so these runs never compete with the user's Mac or the virtual machines (docs/unit-coverage.md). The
+# (fake-based CUJ/E2E) specs to run, splits them by required platform, waits, and prints each spec's result. Each shard
+# uses a clean runner, so these runs never compete with the user's desktop (docs/unit-coverage.md). The
 # suite may run here because a GitHub Actions runner is nobody's desktop (scripts/release-suites.cjs).
 #
 # Run logs and artifacts here are public, and the source repository is not: the inputs carry only a commit id, spec
@@ -17,18 +17,35 @@ on:
     inputs:
       request: { description: 'Id scripts/ci-cuj.mjs finds this run by', required: true, type: string }
       sha: { description: 'Full commit id of the source repository to test', required: true, type: string }
-      shards: { description: 'JSON array of {index, specs} shards, specs a space-separated list of spec paths', required: true, type: string }
+      shards: { description: 'JSON array of {index, specs, runner} shards; omitted runner keeps the old Mac-only format', required: true, type: string }
       public_key: { description: 'Base64 SPKI DER RSA public key the results are encrypted to', required: true, type: string }
 permissions: { contents: read }
 env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
 
 jobs:
+  plan:
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux: ${{ steps.plan.outputs.linux }}
+      mac: ${{ steps.plan.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: plan
+        env: { SHARDS: '${{ inputs.shards }}' }
+        run: node scripts/ci-cuj-plan.mjs
+
   # Which runner the macOS shards use (docs/mini-runner.md): the owner's Mac mini for the owner's own work while the lane
   # is on and a runner is online, GitHub's otherwise. The decision is main's scripts/mini-lane.mjs, run from a checkout
   # of main (never the pull request's code, which holds no token here); any failure here is GitHub's runner.
   route:
-    if: vars.SOURCE_REPO != ''
+    needs: plan
+    if: needs.plan.outputs.mac != '[]'
     runs-on: ubuntu-latest
     # the wait for an offline mini (MINI_WAIT_SECONDS) is at most a few minutes
     timeout-minutes: 10
@@ -79,26 +96,30 @@ jobs:
           MINI_WAIT_SECONDS: ${{ vars.MINI_WAIT_SECONDS }}
           # the launcher's slots and this run's macOS shards: a run whose shards do not all fit idle runners goes to GitHub
           MINI_SLOTS: ${{ vars.MINI_SLOTS }}
-          MAC_JOBS: ${{ inputs.shards }}
+          MAC_JOBS: ${{ needs.plan.outputs.mac }}
           RUNNERS_TOKEN: ${{ secrets.MINI_RUNNERS_TOKEN }}
           # whoever started this run (scripts/ci-cuj.mjs, with their own gh login)
           REQUESTER: ${{ github.actor }}
         run: node scripts/mini-lane.mjs
 
   cuj:
-    needs: route
+    needs: [plan, route]
     # !cancelled(): a route job that failed or timed out leaves the shards on GitHub's runner, never skipped
-    if: ${{ !cancelled() && vars.SOURCE_REPO != '' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.mac != '[]' }}
     # scripts/ci-cuj.mjs finds each shard's job and artifact by this index
     name: shard ${{ matrix.index }}
     # the owner's Mac mini or GitHub's macOS runner, as job route decides (docs/mini-runner.md)
     runs-on: ${{ fromJSON(needs.route.outputs.runs_on || '"macos-15"') }}
+    concurrency:
+      group: ${{ contains(needs.route.outputs.runs_on, 'self-hosted') && format('ci-mini-{0}-{1}', github.run_id, matrix.index) || matrix.mac_lane || 'mopilot-hosted-mac-0' }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.shards) }}
-    steps:
+        include: ${{ fromJSON(needs.plan.outputs.mac) }}
+    steps: &cuj-steps
       - name: Check the inputs
         env: { SHA: '${{ inputs.sha }}', SPECS: '${{ matrix.specs }}' }
         run: |
@@ -107,14 +128,26 @@ jobs:
           for spec in $SPECS; do
             [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._/-]+\.spec\.ts$ && "$spec" != *..* ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
           done
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      # Main owns the Linux toolchain setup, so CUJ can still test a source commit from before the installer existed.
+      - if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: main
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci-install-swift.mjs
+          sparse-checkout-cone-mode: false
+      - if: runner.os == 'Linux'
+        run: node scripts/ci-install-swift.mjs
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.SOURCE_REPO }}
           ref: ${{ inputs.sha }}
           token: ${{ secrets.SOURCE_TOKEN }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
       # npm's download cache, read-only for the same reason as Electron's below (the setup-node cache option would save it)
       - uses: actions/cache/restore@v4
         with:
@@ -131,13 +164,50 @@ jobs:
       - run: npm ci
       # Electron downloads its binary on first use; a network blip there would fail the shard's first test
       - run: node scripts/ensure-electron.cjs || { sleep 10; node scripts/ensure-electron.cjs; } || { sleep 30; node scripts/ensure-electron.cjs; }
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # A failing spec does not fail the job: scripts/ci-cuj.mjs judges each spec from results.json, and a failed run
       # here emails whoever started it, once per agent iteration. A shard that brings no results back still fails
       # there, and setup steps (checkout, install, Electron) still fail the job.
       - name: Run the specs
         env: { SPECS: '${{ matrix.specs }}', PLAYWRIGHT_JSON_OUTPUT_FILE: results.json }
         # word splitting of SPECS is the point: one argument per spec path, each checked above
-        run: npx playwright test -c tests/e2e --reporter=list,json $SPECS || echo "::warning::Some specs failed; scripts/ci-cuj.mjs reports which"
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then runner=(xvfb-run -a npx); else runner=(npx); fi
+          "${runner[@]}" playwright test -c tests/e2e --reporter=list,json $SPECS || echo "::warning::Some specs failed; scripts/ci-cuj.mjs reports which"
+      # Counts only, alongside encrypted detailed evidence. A green execution is not a passed test result.
+      - name: Summarize test outcome
+        if: ${{ !cancelled() }}
+        env: { SOURCE_SHA: '${{ inputs.sha }}', SPECS: '${{ matrix.specs }}' }
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const counts = { expected: 0, unexpected: 0, flaky: 0, skipped: 0 };
+          const requested = (process.env.SPECS || '').split(/\s+/).filter(Boolean);
+          const executed = new Set();
+          const array = value => {
+            if (value === undefined) return [];
+            if (!Array.isArray(value)) throw new Error('Invalid Playwright report array');
+            return value;
+          };
+          const walk = suite => {
+            for (const spec of array(suite.specs)) for (const test of array(spec.tests)) {
+              const key = Object.hasOwn(counts, test.status) ? test.status : 'unexpected';
+              counts[key]++;
+              if (key === 'expected' || key === 'flaky') executed.add('tests/e2e/' + spec.file);
+            }
+            for (const child of array(suite.suites)) walk(child);
+          };
+          if (fs.existsSync('results.json')) {
+            const report = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+            if (report.specs !== undefined) throw new Error('Invalid Playwright report root');
+            for (const suite of array(report.suites)) walk(suite);
+            counts.unexpected += array(report.errors).length;
+          }
+          const complete = requested.length > 0 && requested.every(spec => executed.has(spec));
+          const outcome = counts.unexpected ? 'FAILED' : complete ? 'PASSED' : 'NOT RUN';
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## CUJ test result: ${outcome}\nSource: ${process.env.SOURCE_SHA}\n\n${JSON.stringify(counts)}\n`);
+          NODE
       # results.json and the traces, encrypted to the starter's public key: AES-256-GCM under a random key, which is
       # itself encrypted with RSA-OAEP (SHA-256). Inline rather than a script of the source repository, so a branch
       # from before scripts/ci-cuj.mjs can be tested too; scripts/ci-cuj.mjs (decryptBundle) reverses it.
@@ -166,3 +236,30 @@ jobs:
           name: cuj-${{ matrix.index }}
           path: ${{ runner.temp }}/cuj
           retention-days: 1
+
+  # Linux depends only on planning, so a native route or runner wait cannot delay these shards.
+  cuj-linux:
+    needs: plan
+    if: needs.plan.outputs.linux != '[]'
+    name: shard ${{ matrix.index }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.linux) }}
+    steps: *cuj-steps
+
+  report:
+    needs: [plan, cuj, cuj-linux]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, actions: read }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Summarize runner wait and execution
+        env: { GH_TOKEN: '${{ github.token }}', SOURCE_SHA: '${{ inputs.sha }}' }
+        run: node scripts/ci-status.mjs

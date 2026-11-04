@@ -135,6 +135,10 @@ jobs:
     needs: pick
     if: needs.pick.outputs.sha != ''
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-2
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -193,6 +197,10 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.rust-scope.outputs.os || '["ubuntu-latest", "macos-15", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ startsWith(matrix.os, 'macos') && 'mopilot-hosted-mac-3' || format('ci-independent-{0}-{1}-{2}', github.run_id, github.job, matrix.os) }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

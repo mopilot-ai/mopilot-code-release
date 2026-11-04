@@ -131,6 +131,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       # Main owns the Linux toolchain setup, so CUJ can still test a source commit from before the installer existed.
+      # Keep its sparse Git configuration out of the later full source checkout.
       - if: runner.os == 'Linux'
         uses: actions/checkout@v4
         with:
@@ -138,9 +139,11 @@ jobs:
           ref: main
           token: ${{ secrets.SOURCE_TOKEN }}
           persist-credentials: false
+          path: .ci-toolchain
           sparse-checkout: scripts/ci-install-swift.mjs
           sparse-checkout-cone-mode: false
       - if: runner.os == 'Linux'
+        working-directory: .ci-toolchain
         run: node scripts/ci-install-swift.mjs
       - uses: actions/checkout@v4
         with:

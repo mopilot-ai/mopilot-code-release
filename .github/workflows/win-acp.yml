@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - run: npm ci --ignore-scripts > "$RUNNER_TEMP/npm-ci.log" 2>&1 || { tail -50 "$RUNNER_TEMP/npm-ci.log"; exit 1; }
+      # what npm's prepare script would have made: the harness catalog every ACP module reads
+      - run: node scripts/harness-catalog.mjs
       - name: Build the Rust core and sage-mcp.exe, and test sage-mcp on Windows
         working-directory: core
         run: |

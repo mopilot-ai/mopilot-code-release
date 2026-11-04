@@ -67,6 +67,10 @@ jobs:
     needs: plan
     if: needs.plan.outputs.e2e != ''
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-0
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +121,10 @@ jobs:
     needs: plan
     if: needs.plan.outputs.mac != ''
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-1
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4

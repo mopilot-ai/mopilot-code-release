@@ -23,6 +23,10 @@ jobs:
   ios:
     if: vars.SOURCE_REPO != ''
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-4
+      cancel-in-progress: false
+      queue: max
     # tests/e2eOwnRunner.invariant.test.ts holds a release spec's own timeout under this
     timeout-minutes: 90
     steps:

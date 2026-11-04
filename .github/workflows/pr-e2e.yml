@@ -226,10 +226,11 @@ jobs:
 
   # the specs left to run on Linux under xvfb, where the account runs about twenty jobs at once with no queue; the macOS
   # ones are job e2e-mac below
+  # The planner runs source code: its runner field cannot allocate a hosted Mac outside the native job's budget.
   e2e:
     needs: [start, plan]
     if: needs.plan.outputs.e2e_run_linux != ''
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -325,6 +326,10 @@ jobs:
     # !cancelled(): a route job that failed or timed out leaves the macOS shards on GitHub's runner, never skipped
     if: ${{ !cancelled() && needs.start.outputs.sha != '' && needs.plan.result == 'success' && needs.plan.outputs.e2e_run_mac != '' }}
     runs-on: ${{ fromJSON(needs.route.outputs.runs_on || '"macos-15"') }}
+    concurrency:
+      group: ${{ contains(needs.route.outputs.runs_on, 'self-hosted') && format('ci-mini-{0}-{1}', github.run_id, matrix.shard) || 'mopilot-hosted-mac-4' }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     strategy:
       fail-fast: false

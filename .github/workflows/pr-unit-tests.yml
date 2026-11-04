@@ -33,11 +33,14 @@ name: PR unit tests
 # Pull requests read. Run logs here are public, as release.yml's are: they show pull request numbers, commit
 # ids and test output, never pull request titles or bodies. Pull request code runs only after the token has
 # been used, with no credentials left in the checkout.
-run-name: ${{ format('Unit tests for pull request {0}', inputs.pr) }}
+run-name: ${{ format('Unit tests for pull request {0}', inputs.pr) }}${{ inputs.audit_of != '' && format(' (audit of {0})', inputs.audit_of) || inputs.fallback_of != '' && format(' (GitHub fallback of {0})', inputs.fallback_of) || '' }}
 on:
   workflow_dispatch:
     inputs:
       pr: { description: 'Pull request number in the source repository', required: true, type: number }
+      mac_pool: { description: 'Automatic local/GitHub pool, or a GitHub-only spillover', required: false, type: choice, options: [auto, github], default: auto }
+      fallback_of: { description: 'Parent run of an automatic spillover', required: false, type: string, default: '' }
+      fallback_head: { description: 'Source head owned by the spillover', required: false, type: string, default: '' }
       # an audit of a run whose macOS job ran on a sealed local runner (docs/local-runner.md): the run's id, the head and
       # main it tested, its macOS result and the runner's owner. The audit runs that job on GitHub and posts no status.
       audit_of: { description: 'Run id of the local run to audit (empty: a normal check)', required: false, type: string, default: '' }
@@ -48,7 +51,7 @@ on:
 permissions: { contents: read }
 concurrency:
   # a newer run for the same pull request supersedes an older one; an audit supersedes only an older audit
-  group: pr-unit-tests-${{ inputs.pr }}${{ inputs.audit_of != '' && '-audit' || '' }}
+  group: pr-unit-tests-${{ inputs.pr }}${{ inputs.audit_of != '' && '-audit' || inputs.fallback_of != '' && format('-fallback-{0}', inputs.fallback_of) || '' }}
   cancel-in-progress: true
 env:
   SOURCE_REPO: ${{ vars.SOURCE_REPO }}
@@ -61,6 +64,7 @@ jobs:
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
+      reason: ${{ steps.pr.outputs.reason }}
       shards: ${{ steps.split.outputs.shards }}
       mac: ${{ steps.split.outputs.mac }}
       rust: ${{ steps.split.outputs.rust }}
@@ -73,7 +77,7 @@ jobs:
     steps:
       - name: Find the pull request's head and mark it pending
         id: pr
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', PR: '${{ inputs.pr }}', AUDIT_HEAD: '${{ inputs.audit_head }}', AUDIT_BASE: '${{ inputs.audit_base }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', PR: '${{ inputs.pr }}', AUDIT_HEAD: '${{ inputs.audit_head }}', AUDIT_BASE: '${{ inputs.audit_base }}', FALLBACK_HEAD: '${{ inputs.fallback_head }}', FALLBACK_OF: '${{ inputs.fallback_of }}', MAC_POOL: '${{ inputs.mac_pool }}' }
         run: |
           set -euo pipefail
           if [ -n "${AUDIT_HEAD:-}" ]; then
@@ -89,15 +93,24 @@ jobs:
           info=$(gh api "repos/$SOURCE_REPO/pulls/$PR" --jq '"\(.head.sha) \(.base.repo.default_branch) \(.state)"')
           read -r sha base state <<< "$info"
           [ "$state" = open ] || { echo "::error::Pull request $PR is $state."; exit 1; }
+          if [ -n "${FALLBACK_HEAD:-}${FALLBACK_OF:-}" ]; then
+            [[ "${FALLBACK_HEAD:-}" =~ ^[0-9a-f]{40}$ && "${FALLBACK_OF:-}" =~ ^[1-9][0-9]*$ && "${MAC_POOL:-}" = github ]] || { echo "::error::Invalid spillover identity"; exit 1; }
+            [ "$sha" = "$FALLBACK_HEAD" ] || { echo "Spillover retired: pull request head changed."; exit 0; }
+          fi
           # main as it is now: the pull request is tested merged with it, and the status names it
           base_sha=$(gh api "repos/$SOURCE_REPO/git/ref/heads/$base" --jq .object.sha)
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          # Preserve the launcher's reason before the running status replaces its queued status.
+          why=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses?per_page=100" --jq '[.[] | select(.context == "unit-tests" and (.description // "" | startswith("Queued")))][0].description // "Not recorded by this dispatcher"') || why='Queue reason lookup failed'
           # Retry only transient HTTP errors/timeouts, never permission failures; no test rerun.
           payload=$(jq -cn --arg state pending --arg context "$STATUS_CONTEXT" --arg description 'Running the unit tests that reach this change' \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          # Recheck after network lookups, immediately before publication. The status API has no conditional write.
+          if [ -n "${FALLBACK_OF:-}" ]; then
+            owner=$(gh api "repos/$SOURCE_REPO/commits/$sha/statuses?per_page=100" --jq '[.[] | select(.context == "unit-tests")][0] | select(.state == "pending") | .target_url // ""')
+            [ "$owner" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$FALLBACK_OF?mac_pool=github" ] || { echo "Spillover retired: a newer check owns this head."; exit 0; }
+          fi
+          { echo "sha=$sha"; echo "base=$base"; echo "base_sha=$base_sha"; echo "reason=$(printf '%s' "$why" | tr '\r\n' '  ')"; } >> "$GITHUB_OUTPUT"
           code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
             --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
             --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
@@ -330,13 +343,14 @@ jobs:
         with: { node-version: 24 }
       # the CI App reads the organization's runners (Self-hosted runners: read); no App, no local lane
       - id: runners-app
-        if: vars.CI_APP_ID != '' && vars.LOCAL_LANE == 'on'
+        if: vars.CI_APP_ID != '' && vars.LOCAL_LANE == 'on' && inputs.mac_pool != 'github'
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-organization-self-hosted-runners: read }
       - id: route
         env:
           LOCAL_LANE: ${{ vars.LOCAL_LANE }}
+          MAC_POOL: ${{ inputs.mac_pool }}
           LOCAL_RUNNER_OWNERS: ${{ vars.LOCAL_RUNNER_OWNERS }}
           LOCAL_WAIT_SECONDS: ${{ vars.LOCAL_WAIT_SECONDS }}
           LOCAL_AUDIT_EVERY: ${{ vars.LOCAL_AUDIT_EVERY }}
@@ -347,10 +361,43 @@ jobs:
           RUNNERS_TOKEN: ${{ steps.runners-app.outputs.token }}
         run: node scripts/local-lane.mjs route
 
+  # A selected local runner can disappear before accepting its job. This trusted job sends one hosted successor.
+  local-pool-watch:
+    needs: [plan, route-mac]
+    if: ${{ !cancelled() && needs.route-mac.outputs.runner != '' && inputs.audit_of == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: ci-app
+        if: vars.CI_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
+      - name: Watch local acceptance and spill over to GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          STATUS_GH_TOKEN: ${{ steps.ci-app.outputs.token }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          LOCAL_RUNNER: ${{ needs.route-mac.outputs.runner }}
+          LOCAL_START_SECONDS: ${{ vars.LOCAL_START_SECONDS }}
+          PR: ${{ inputs.pr }}
+        run: node scripts/local-pool-watch.mjs
+
   mac:
     needs: [plan, route-mac]
     if: ${{ !cancelled() && needs.plan.outputs.mac == 'true' }}
     runs-on: ${{ fromJSON(needs.route-mac.outputs.runs_on || '"macos-15"') }}
+    concurrency:
+      group: ${{ contains(needs.route-mac.outputs.runs_on, 'self-hosted') && format('ci-local-{0}', github.run_id) || 'mopilot-hosted-mac-0' }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -427,6 +474,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ startsWith(matrix.os, 'macos') && 'mopilot-hosted-mac-1' || format('ci-independent-{0}-{1}-{2}', github.run_id, github.job, matrix.os) }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 25
     # the steps' set -euo pipefail on Windows too, where the default shell is PowerShell
     defaults:
       run:
@@ -669,6 +721,8 @@ jobs:
           payload=$(jq -cn --arg state "$state" --arg context "$STATUS_CONTEXT" --arg description "$description" \
             --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             '{state: $state, context: $context, description: $description, target_url: $target_url}')
+          owner=$(gh api "repos/$SOURCE_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context == "unit-tests")][0].target_url // ""')
+          [ "$owner" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" ] || { echo "Result retired: a newer check owns this head."; exit 0; }
           code=$(curl -q --fail --silent --show-error --proto '=https' --max-time 15 --retry 2 --retry-max-time 30 \
             --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
             --header 'Content-Type: application/json' --header 'X-GitHub-Api-Version: 2022-11-28' \
@@ -676,6 +730,26 @@ jobs:
             "$GITHUB_API_URL/repos/$SOURCE_REPO/statuses/$SHA")
           [ "$code" = 201 ] || { echo "::error::Commit status returned HTTP $code"; exit 1; }
           echo "Pull request ${{ inputs.pr }} at $SHA: $state"
+
+  runner-status:
+    needs: [plan, report]
+    if: ${{ !cancelled() && needs.plan.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, actions: read }
+    steps:
+      # Main's reporting code only: this job holds a token, so no PR code runs here.
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Summarize runner wait and execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          TEST_PLAN: ${{ needs.plan.outputs.digest }}
+          CHECK_REASON: ${{ needs.plan.outputs.reason }}
+        run: node scripts/ci-status.mjs
 
   # one sampled local run in LOCAL_AUDIT_EVERY is run again on GitHub's runners for the same head and main; the audit's
   # own job here compares the two macOS results and quarantines the runner's owner on a local pass that failed on GitHub

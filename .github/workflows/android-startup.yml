@@ -63,8 +63,14 @@ jobs:
           pin() { sed -n "s/^$1 = \"\(.*\)\"/\1/p" "$toml"; }
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           # the platform itself is fetched by Gradle (its package name is android-37.0 for 37 but android-36 for 36)
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "build-tools;$(pin buildTools)" "ndk;$(pin ndkVersion)" \
-            "cmake;3.22.1" "system-images;android-36;google_apis;x86_64" > /dev/null
+          # a download that arrives damaged ("Error on ZipFile unknown archive") fails the whole install: clear the partial files and try again
+          installed=0
+          for attempt in 1 2 3; do
+            if "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "build-tools;$(pin buildTools)" "ndk;$(pin ndkVersion)" \
+              "cmake;3.22.1" "system-images;android-36;google_apis;x86_64" > /dev/null; then installed=1; break; fi
+            echo "::warning::sdkmanager failed (attempt $attempt of 3)"; rm -rf "$SDK/.temp"; sleep 15
+          done
+          [ "$installed" = 1 ] || { echo "::error::The Android SDK pieces could not be installed"; exit 1; }
           df -h / | tail -1
       - name: Build the release APK (x86_64 only)
         working-directory: mobile
@@ -200,8 +206,14 @@ jobs:
           toml=mobile/node_modules/react-native/gradle/libs.versions.toml
           pin() { sed -n "s/^$1 = \"\(.*\)\"/\1/p" "$toml"; }
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "build-tools;$(pin buildTools)" "ndk;$(pin ndkVersion)" \
-            "cmake;3.22.1" "system-images;android-36;google_apis;x86_64" > /dev/null
+          # a download that arrives damaged ("Error on ZipFile unknown archive") fails the whole install: clear the partial files and try again
+          installed=0
+          for attempt in 1 2 3; do
+            if "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "emulator" "build-tools;$(pin buildTools)" "ndk;$(pin ndkVersion)" \
+              "cmake;3.22.1" "system-images;android-36;google_apis;x86_64" > /dev/null; then installed=1; break; fi
+            echo "::warning::sdkmanager failed (attempt $attempt of 3)"; rm -rf "$SDK/.temp"; sleep 15
+          done
+          [ "$installed" = 1 ] || { echo "::error::The Android SDK pieces could not be installed"; exit 1; }
       - name: Build the release APK for the dev host (x86_64 only)
         working-directory: mobile
         # The emulator reaches the runner's loopback as 10.0.2.2. A release build blocks plain http, which the dev host speaks, so the

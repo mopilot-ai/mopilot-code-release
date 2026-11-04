@@ -128,6 +128,11 @@ jobs:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-0
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -150,6 +155,11 @@ jobs:
     if: needs.plan.outputs.e2e == 'true'
     # shard `linux-<n>` on Linux, every other on macOS
     runs-on: ${{ startsWith(format('{0}', matrix.shard), 'linux-') && 'ubuntu-latest' || 'macos-15' }}
+    concurrency:
+      group: ${{ startsWith(format('{0}', matrix.shard), 'linux-') && format('ci-linux-{0}-{1}', github.run_id, matrix.shard) || contains(',1,3,5,7,9,own,', format(',{0},', matrix.shard)) && 'mopilot-hosted-mac-2' || 'mopilot-hosted-mac-3' }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -200,6 +210,11 @@ jobs:
   mac:
     needs: plan
     runs-on: macos-15
+    concurrency:
+      group: ${{ matrix.arch == 'arm64' && 'mopilot-hosted-mac-0' || 'mopilot-hosted-mac-1' }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 90
     strategy:
       # one architecture failing doesn't hide the other's result
       fail-fast: false
@@ -319,6 +334,11 @@ jobs:
   mac-x64-verify:
     needs: mac
     runs-on: macos-15-intel
+    concurrency:
+      group: mopilot-hosted-mac-1
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
@@ -393,6 +413,11 @@ jobs:
   windows:
     needs: [plan, core-win]
     runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-0
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 90
     environment: release
     permissions: { contents: read, id-token: write }
     steps:

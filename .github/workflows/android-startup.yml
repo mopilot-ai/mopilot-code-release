@@ -245,7 +245,9 @@ jobs:
           config="$(avdmanager list avd | sed -n 's/^ *Path: //p' | head -1)/config.ini"
           test -f "$config" || { echo "::error::No AVD config at $config"; avdmanager list avd; exit 1; }
           sed -i '/^hw.ramSize/d; /^hw.cpu.ncore/d' "$config"
-          printf 'hw.ramSize=4096\nhw.cpu.ncore=3\n' >> "$config"
+          # the default screen is about 320x640 dp, so the chats sit below a card the app shows first and out of what uiautomator lists: a 360x800 dp phone
+          sed -i '/^hw.lcd/d' "$config"
+          printf 'hw.ramSize=4096\nhw.cpu.ncore=3\nhw.lcd.width=720\nhw.lcd.height=1600\nhw.lcd.density=320\n' >> "$config"
           nohup emulator -avd journey -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
           fail() { echo "::error::$1"; tail -40 "$RUNNER_TEMP/emulator.log"; exit 1; }
           timeout 120 adb wait-for-device || fail "No emulator appeared (is KVM on?)"

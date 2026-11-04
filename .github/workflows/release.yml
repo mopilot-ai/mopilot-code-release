@@ -455,12 +455,14 @@ jobs:
           tenant-id: db32a175-c842-4e74-9217-47fa7d5ae766
           allow-no-subscriptions: true
       # the core is signed before the package records its hash (scripts/package.mjs), since signing changes the file;
-      # under a .dll name, as jsign picks the format by extension (the signature is inside the file, whatever its name)
+      # under a .dll name, as jsign picks the format by extension (the signature is inside the file, whatever its name).
+      # sage-mcp.exe, built beside it (scripts/build-core.mjs), is the tool bridge the basic harnesses start
       - run: |
           f=build/vendor/win32-x64/core/mopilot_core
           mv "$f.node" "$f.dll"
           scripts/sign-win.sh "$f.dll"
           mv "$f.dll" "$f.node"
+          scripts/sign-win.sh build/vendor/win32-x64/core/sage-mcp.exe
       - run: npm run package:win:dir
       # signs MoPilot Code.exe, builds the NSIS installer, signs the installer
       - run: node scripts/package-win.mjs --arch x64

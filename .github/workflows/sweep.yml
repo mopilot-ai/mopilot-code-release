@@ -112,6 +112,26 @@ jobs:
         run: |
           set -o pipefail
           node scripts/dogfood-release.mjs 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"
+      # One verified dogfood build at a time through beta and production (docs/release-train.md). Off until the variable
+      # RELEASE_TRAIN names a mode. mopilot.ai decides. A failure here must not fail the sweep, and an earlier failed step
+      # must not stop this one: a build on the train is being watched. mopilot.ai's cron watches it if no sweep runs at all.
+      - name: Advance the release train
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          CI_APP_ID: ${{ vars.CI_APP_ID }}
+          CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          RELEASE_GH_TOKEN: ${{ github.token }}
+          RELEASE_REPO: ${{ github.repository }}
+          RELEASE_TRAIN: ${{ vars.RELEASE_TRAIN }}
+          RELEASE_TRAIN_HOURS: ${{ vars.RELEASE_TRAIN_HOURS }}
+          RELEASE_UPDATE_CHECK: ${{ vars.RELEASE_UPDATE_CHECK }}
+          RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+          MOPILOT_API: ${{ vars.MOPILOT_API }}
+        run: |
+          set -o pipefail
+          node scripts/release-train.mjs 2>&1 | tee -a "$RUNNER_TEMP/sweep.log"
       # A sweep posts no commit status, so a failing one is reported here: two failed sweeps in a row open the main-red
       # issue "Main is red: sweep", and the next sweep that passes closes it (scripts/sweep-red-issue.mjs). A sweep that
       # crashed on a missing package stopped every check and merge for 7.5 hours while main read green. Like the sweep,

@@ -1,0 +1,28 @@
+name: Update check
+# Runs in the public release repository; scripts/sync-release-repo.sh copies it there. The release train
+# (scripts/release-train.mjs) starts it once per build before production: the previous production build updates itself
+# to the candidate through Squirrel on a real macOS runner (scripts/signed-update-check.mjs). It queues under the shared
+# hosted Mac budget, so it never takes a runner from a check already waiting for one.
+# Secret SOURCE_TOKEN and variable SOURCE_REPO check out the script. Nothing here signs, publishes or registers anything.
+run-name: Update check ${{ inputs.from }} to ${{ inputs.to }}
+on:
+  workflow_dispatch:
+    inputs:
+      from: { description: 'The production version installed first', required: true, type: string }
+      to: { description: 'The candidate version it updates to', required: true, type: string }
+permissions: { contents: read }
+jobs:
+  check:
+    runs-on: macos-15
+    concurrency:
+      group: mopilot-hosted-mac-2
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: node scripts/signed-update-check.mjs --from "$FROM" --to "$TO"
+        env: { FROM: '${{ inputs.from }}', TO: '${{ inputs.to }}' }

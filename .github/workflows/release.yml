@@ -537,9 +537,89 @@ jobs:
         run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform win32 --arch x64 --dir out
         env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
 
+  # Linux builds its native terminal and Rust core on each architecture; packaged startup runs only on the runner.
+  linux:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Install Linux build and desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 libgtk-3-0 libnss3 libxss1 libasound2t64 libsecret-1-0 gnome-keyring dbus-x11 xvfb iproute2
+      - uses: actions/download-artifact@v4
+        with: { name: release-notes, path: docs }
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - run: npm ci
+      - name: Install the pinned Rust toolchain
+        working-directory: core
+        run: rustup toolchain install
+      - run: npm run package:linux
+      - name: Install and start the Linux desktop with a temporary keyring
+        env: { XDG_CURRENT_DESKTOP: GNOME }
+        run: |
+          sudo apt-get install -y ./out/MoPilot-Code-*-$(node -p process.arch).deb
+          dbus-run-session -- bash -euo pipefail -c '
+            mapfile -t installed < <(dpkg-query -L mopilot-code | sed -n "/^\/opt\/.*\/mopilot-code$/p")
+            [ "${#installed[@]}" -eq 1 ]
+            printf "%s" "mopilot-ci" | gnome-keyring-daemon --unlock --components=secrets
+            xvfb-run -a node scripts/smoke-launch.mjs "$(dirname "${installed[0]}")"
+            xvfb-run -a node tests/packaged/linux-desktop.mjs "${installed[0]}"
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-check-${{ matrix.arch }}
+          path: test-results/linux-package
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            out/MoPilot-Code-*.deb
+            out/MoPilot-Code-*.tar.gz
+
+  linux-release:
+    needs: [linux, unit, unit-mac, e2e]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: { arch: [x64, arm64] }
+    permissions: { contents: write }
+    env:
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO || github.repository }}', ref: '${{ inputs.sha }}', token: '${{ secrets.SOURCE_TOKEN || github.token }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version
+      - uses: actions/download-artifact@v4
+        with: { name: release-notes, path: docs }
+      - uses: actions/download-artifact@v4
+        with: { name: 'linux-${{ matrix.arch }}', path: out }
+      - run: node scripts/release.mjs --platform linux --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --upload api
+      - if: vars.SOURCE_REPO != ''
+        continue-on-error: true
+        timeout-minutes: 30
+        run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform linux --arch ${{ matrix.arch }} --dir out
+        env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
+
   # Only when every platform is registered: tag the commit, then publish if asked.
   finish:
-    needs: [mac-release, windows-release]
+    needs: [mac-release, windows-release, linux-release]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions: { contents: write }

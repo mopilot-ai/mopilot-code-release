@@ -55,6 +55,15 @@ jobs:
           done
           echo "Release specs: $(echo $list)"
           echo "list=$(echo $list)" >> "$GITHUB_OUTPUT"
+      # The Rust core's addon, which tests/e2e/global-setup.ts builds on a miss. Read from what main's runs saved
+      # (docs/unit-coverage.md#cache-writes)
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/target/release/libmopilot_core.dylib
+            core/target/release/libmopilot_core.so
+            core/target/release/core-sources.sha256
+          key: core-addon-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock', 'core/Cargo.toml', 'core/rust-toolchain.toml', 'core/crates/**') }}
       - run: npm ci
       - name: Run the release specs
         env: { SPECS: '${{ steps.specs.outputs.list }}' }

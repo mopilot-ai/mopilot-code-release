@@ -8,6 +8,8 @@ name: Watch
 # 5.5 hours, then starts the next run and ends. Every watcher run that ends starts a sweep (sweep.yml), and every sweep
 # starts a watcher when none is queued or running, so one lost to a runner failure or a cancel is replaced (but not one
 # that ended within ten minutes of starting, which would loop; docs/unit-coverage.md#sweep).
+# While the variable RELEASE_TRAIN names a mode it also starts a sweep every 15 minutes: the release train moves on the
+# clock, and a quiet repository would otherwise give it no tick (docs/release-train.md).
 # A change here or to the script takes effect at the next hand-over; cancel the run to apply it sooner.
 #
 # Variable CI_APP_ID and secret CI_APP_PRIVATE_KEY: the CI App, whose installation token the script reads the source
@@ -38,5 +40,5 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Start a sweep for each pull request head with no check
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
+        env: { RELEASE_TRAIN: '${{ vars.RELEASE_TRAIN }}', GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', CI_APP_ID: '${{ vars.CI_APP_ID }}', CI_APP_PRIVATE_KEY: '${{ secrets.CI_APP_PRIVATE_KEY }}', RELEASE_GH_TOKEN: '${{ github.token }}', RELEASE_REPO: '${{ github.repository }}', CHECK_SETTLE_MINUTES: '${{ vars.CHECK_SETTLE_MINUTES }}' }
         run: node scripts/ci-watch.mjs

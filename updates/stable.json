@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.10",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.10/MoPilot-Code-0.4.10-arm64.zip",
+      "notes": "- Linux desktop packages, and more agents from the ACP registry.\n- Context compaction now waits for the current turn to finish.\n- Browser control can open tabs when Chrome has no window open.\n- New sessions show up in their project right away.\n- A message from another chat says who sent it by name.\n- Safer updates: staged rollouts and a way to roll back a bad release.\n- Many more fixes and improvements.",
+      "pub_date": "2026-11-05T12:50:06.878Z",
+      "sha256": "56621e1a8fa6291e6f5134dcf3ee815921754cb0a547b3541597982938eae5af",
+      "size": 157582435
+    },
+    {
+      "version": "0.4.10",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.10/MoPilot-Code-0.4.10-x64.zip",
+      "notes": "- Linux desktop packages, and more agents from the ACP registry.\n- Context compaction now waits for the current turn to finish.\n- Browser control can open tabs when Chrome has no window open.\n- New sessions show up in their project right away.\n- A message from another chat says who sent it by name.\n- Safer updates: staged rollouts and a way to roll back a bad release.\n- Many more fixes and improvements.",
+      "pub_date": "2026-11-05T12:50:06.878Z",
+      "sha256": "a7d0066452c62e85934494646d21d7f63b7d7bb02a6ea6f1206f2352591215e9",
+      "size": 163632100
+    },
+    {
+      "version": "0.4.10",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.10/MoPilot-Code-Setup-0.4.10-x64.exe",
+      "notes": "- Linux desktop packages, and more agents from the ACP registry.\n- Context compaction now waits for the current turn to finish.\n- Browser control can open tabs when Chrome has no window open.\n- New sessions show up in their project right away.\n- A message from another chat says who sent it by name.\n- Safer updates: staged rollouts and a way to roll back a bad release.\n- Many more fixes and improvements.",
+      "pub_date": "2026-11-05T12:50:06.878Z",
+      "sha256": "c0de1345f9264098235484be6e2aec8b96bfab187904979429e4564f451736f5",
+      "size": 115132168
+    },
+    {
       "version": "0.4.7",
       "platform": "darwin",
       "arch": "arm64",
@@ -1632,6 +1665,29 @@
       "size": 114132168
     }
   ],
-  "linuxReleases": [],
-  "revision": "7ae67437-88c6-4e92-b151-aff3d44b5bef"
+  "linuxReleases": [
+    {
+      "version": "0.4.10",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.10/MoPilot-Code-0.4.10-arm64.deb",
+      "notes": "- Linux desktop packages, and more agents from the ACP registry.\n- Context compaction now waits for the current turn to finish.\n- Browser control can open tabs when Chrome has no window open.\n- New sessions show up in their project right away.\n- A message from another chat says who sent it by name.\n- Safer updates: staged rollouts and a way to roll back a bad release.\n- Many more fixes and improvements.",
+      "pub_date": "2026-11-05T12:50:06.878Z",
+      "sha256": "df3d9c356b68d0fe0984193d3c66c23a00805cd28ccbf3dab30152302a526959",
+      "size": 145078276
+    },
+    {
+      "version": "0.4.10",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.10/MoPilot-Code-0.4.10-x64.deb",
+      "notes": "- Linux desktop packages, and more agents from the ACP registry.\n- Context compaction now waits for the current turn to finish.\n- Browser control can open tabs when Chrome has no window open.\n- New sessions show up in their project right away.\n- A message from another chat says who sent it by name.\n- Safer updates: staged rollouts and a way to roll back a bad release.\n- Many more fixes and improvements.",
+      "pub_date": "2026-11-05T12:50:06.878Z",
+      "sha256": "e39a955de6a79a8c3855ee7bd59e8e36deab5fd2bcb111a73bb3d583e3b8ef06",
+      "size": 151257320
+    }
+  ],
+  "revision": "d9222f34-8897-4928-ba67-4d94445b34d3"
 }

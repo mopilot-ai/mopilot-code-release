@@ -267,6 +267,15 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # The Rust core's addon, which tests/e2e/global-setup.ts builds on a miss. Read from what main's runs saved, never saved
+      # from here: this job runs the pull request's code (docs/unit-coverage.md#cache-writes)
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/target/release/libmopilot_core.dylib
+            core/target/release/libmopilot_core.so
+            core/target/release/core-sources.sha256
+          key: core-addon-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock', 'core/Cargo.toml', 'core/rust-toolchain.toml', 'core/crates/**') }}
       # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
       # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
       # before any test runs, so a test cannot change what the next run restores
@@ -366,6 +375,15 @@ jobs:
             ~/Library/Caches/electron
             ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # The Rust core's addon, which tests/e2e/global-setup.ts builds on a miss. Read from what main's runs saved, never saved
+      # from here: this job runs the pull request's code (docs/unit-coverage.md#cache-writes)
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/target/release/libmopilot_core.dylib
+            core/target/release/libmopilot_core.so
+            core/target/release/core-sources.sha256
+          key: core-addon-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock', 'core/Cargo.toml', 'core/rust-toolchain.toml', 'core/crates/**') }}
       # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
       # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
       # before any test runs, so a test cannot change what the next run restores

@@ -22,7 +22,8 @@ permissions: { contents: read }
 jobs:
   ios:
     if: vars.SOURCE_REPO != ''
-    runs-on: macos-15
+    # the phone's Expo SDK does not compile with macos-15's newest Xcode (26.3)
+    runs-on: macos-26
     concurrency:
       group: mopilot-hosted-mac-4
       cancel-in-progress: false

@@ -48,12 +48,12 @@ jobs:
         run: |
           $tag = if ($env:RELEASE) { $env:RELEASE } else { gh release list -R $env:GITHUB_REPOSITORY --limit 1 --json tagName --jq '.[0].tagName' }
           "Testing $tag"
-          gh release download $tag -R $env:GITHUB_REPOSITORY -p 'MoPilot-Code-Setup-*.exe' -D win
+          gh release download $tag -R $env:GITHUB_REPOSITORY -p 'MoPilot*-Setup-*.exe' -D win
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $setup = Get-ChildItem -File win -Filter 'MoPilot-Code-Setup-*.exe' | Select-Object -First 1
+          $setup = Get-ChildItem -File win -Filter 'MoPilot*-Setup-*.exe' | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
-          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot Code.exe' | Select-Object -First 1
-          if (-not $exe) { throw 'the installer left no MoPilot Code.exe under LOCALAPPDATA\Programs' }
+          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot*.exe' | Where-Object { $_.Name -in @('MoPilot.exe', 'MoPilot Code.exe') } | Sort-Object { $_.Name.Length } | Select-Object -First 1
+          if (-not $exe) { throw 'the installer left no MoPilot executable under LOCALAPPDATA\Programs' }
           "APP_DIR=$($exe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Check containment
         shell: pwsh

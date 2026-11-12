@@ -286,7 +286,7 @@ jobs:
       - run: npx vite build && node scripts/package.mjs --arch ${{ matrix.arch }}
       - name: Verify signature
         run: |
-          APP="out/MoPilot Code-darwin-${{ matrix.arch }}/MoPilot Code.app"
+          APP="out/MoPilot-darwin-${{ matrix.arch }}/MoPilot.app"
           codesign --verify --deep --strict -vv "$APP"
           spctl -a -vvv -t exec "$APP"
           # the ticket is checked by release.mjs below, tried again while Apple's ticket service fails (scripts/notary.mjs)
@@ -305,7 +305,7 @@ jobs:
           done
           # the helper and sage-mcp: present, signed by the same team with the hardened runtime, and the helper
           # names the main app as its only caller
-          HELPER="$APP/Contents/Helpers/MoPilot Code.app"
+          HELPER="$APP/Contents/Helpers/MoPilot.app"
           SAGE_MCP="$APP/Contents/Helpers/sage-mcp"
           AUTH_COMMAND="$APP/Contents/Helpers/auth-command"
           TEAM=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
@@ -323,7 +323,7 @@ jobs:
       # the shipped app lacks, such as a package the prune dropped. The x64 app is started on an Intel Mac instead
       # (mac-x64-verify): under Rosetta on these arm64 runners it never finished starting (0.3.33).
       - if: matrix.arch == 'arm64'
-        run: node scripts/smoke-launch.mjs "out/MoPilot Code-darwin-arm64/MoPilot Code.app"
+        run: node scripts/smoke-launch.mjs "out/MoPilot-darwin-arm64/MoPilot.app"
       # zip and DMG; the DMG is signed, notarized, stapled and assessed. Uploading waits for the tests (mac-release).
       - run: node scripts/release.mjs --arch ${{ matrix.arch }} --channel "$RELEASE_CHANNEL" --notes-file docs/release-notes.md --build-only
       - uses: actions/upload-artifact@v4
@@ -333,8 +333,8 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           path: |
-            out/MoPilot-Code-*-${{ matrix.arch }}.zip
-            out/MoPilot-Code-*-${{ matrix.arch }}.dmg
+            out/MoPilot-*-${{ matrix.arch }}.zip
+            out/MoPilot-*-${{ matrix.arch }}.dmg
 
   # The x64 app as an Intel Mac runs it, from the zip the release uploads (signed, notarized and stapled): started
   # once, like the arm64 app in its own job.
@@ -354,8 +354,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: mac-x64, path: out }
       - run: |
-          ditto -x -k out/MoPilot-Code-*-x64.zip "$RUNNER_TEMP/x64"
-          node scripts/smoke-launch.mjs "$RUNNER_TEMP/x64/MoPilot Code.app"
+          ditto -x -k out/MoPilot-*-x64.zip "$RUNNER_TEMP/x64"
+          node scripts/smoke-launch.mjs "$RUNNER_TEMP/x64/MoPilot.app"
 
   # Once every suite has passed: upload the macOS artifacts and register them as drafts. A suite skipped because
   # main already passed it doesn't hold this up, but a failed or cancelled one does (a skip otherwise skips
@@ -513,7 +513,7 @@ jobs:
           mv "$f.dll" "$f.node"
           scripts/sign-win.sh build/vendor/win32-x64/core/sage-mcp.exe
       - run: npm run package:win:dir
-      # signs MoPilot Code.exe, builds the NSIS installer, signs the installer
+      # signs MoPilot.exe, builds the NSIS installer, signs the installer
       - run: node scripts/package-win.mjs --arch x64
         env: { MOPILOT_WIN_SIGN: scripts/sign-win.sh }
       - uses: actions/upload-artifact@v4
@@ -522,8 +522,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            out/MoPilot-Code-Setup-*-x64.exe
-            out/MoPilot Code-win32-x64/MoPilot Code.exe
+            out/MoPilot-Setup-*-x64.exe
+            out/MoPilot-win32-x64/MoPilot.exe
 
   # Windows itself checks both signatures: valid, MoPilot LLC's certificate, and timestamped (so they
   # outlive the short-lived signing certificate).
@@ -552,11 +552,11 @@ jobs:
       # source tree, so only this sees what the shipped app lacks.
       - shell: pwsh
         run: |
-          $setup = Get-ChildItem -Recurse -File win -Filter 'MoPilot-Code-Setup-*.exe' | Select-Object -First 1
+          $setup = Get-ChildItem -Recurse -File win -Filter 'MoPilot-Setup-*.exe' | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
           # wherever the installer put it for this user (under %LOCALAPPDATA%\Programs)
-          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot Code.exe' | Select-Object -First 1
-          if (-not $exe) { throw 'the installer left no MoPilot Code.exe under LOCALAPPDATA\Programs' }
+          $exe = Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs" -Filter 'MoPilot.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'the installer left no MoPilot.exe under LOCALAPPDATA\Programs' }
           node scripts/smoke-launch.mjs $exe.DirectoryName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -618,9 +618,9 @@ jobs:
       - name: Install and start the Linux desktop with a temporary keyring
         env: { XDG_CURRENT_DESKTOP: GNOME }
         run: |
-          sudo apt-get install -y ./out/MoPilot-Code-*-$(node -p process.arch).deb
+          sudo apt-get install -y ./out/MoPilot-*-$(node -p process.arch).deb
           dbus-run-session -- bash -euo pipefail -c '
-            mapfile -t installed < <(dpkg-query -L mopilot-code | sed -n "/^\/opt\/.*\/mopilot-code$/p")
+            mapfile -t installed < <(dpkg-query -L mopilot-code | sed -En "/^\/opt\/.*\/mopilot$/p")
             [ "${#installed[@]}" -eq 1 ]
             printf "%s" "mopilot-ci" | gnome-keyring-daemon --unlock --components=secrets
             xvfb-run -a node scripts/smoke-launch.mjs "$(dirname "${installed[0]}")"
@@ -638,8 +638,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
           path: |
-            out/MoPilot-Code-*.deb
-            out/MoPilot-Code-*.tar.gz
+            out/MoPilot-*.deb
+            out/MoPilot-*.tar.gz
 
   linux-release:
     needs: [linux, unit, unit-mac, e2e]

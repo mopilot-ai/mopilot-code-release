@@ -1,6 +1,6 @@
 name: Release
 # Started from Admin → Releases → "Release main" (web/lib/releaseRun.ts), or by hand:
-#   gh workflow run release.yml -R mopilot-ai/mopilot-code-release --ref "release-workflow-$(git rev-parse origin/main:.github/workflows/release.yml)" -f version=0.4.0-dogfood.1 -f channel=dogfood -f sha=$(git rev-parse origin/main)
+#   gh workflow run release.yml -R mopilot-ai/mopilot-code-release --ref "release-workflow-$(git rev-parse origin/main:.github/workflows/release.yml)" -f version=0.4.12 -f channel=dogfood -f sha=$(git rev-parse origin/main)
 # It runs in a public release repository (mopilot-ai/mopilot-code-release, whose Actions minutes are free) that
 # holds only this file, pr-unit-tests.yml and the signing secrets: variable SOURCE_REPO names this repository, and secret
 # SOURCE_TOKEN (Contents read and write on it; pr-unit-tests.yml also needs Commit statuses read and write and Pull
@@ -38,8 +38,8 @@ run-name: Release ${{ inputs.version }} (${{ inputs.channel }})
 on:
   workflow_dispatch:
     inputs:
-      version: { description: 'Version, e.g. 0.4.0, 0.4.0-beta.1 or 0.4.0-dogfood.1', required: true, type: string }
-      channel: { description: 'Update channel (must match the version)', required: true, type: choice, options: [dogfood, beta, stable] }
+      version: { description: 'Version, e.g. 0.4.12: plain numbers on every channel', required: true, type: string }
+      channel: { description: 'Update channel the build is first published on', required: true, type: choice, options: [dogfood, beta, stable] }
       sha: { description: 'Full SHA of the main commit to build', required: true, type: string }
       publish_pct: { description: 'Publish at this rollout % once every build is registered (empty: leave drafts)', required: false, type: string, default: '' }
       notes: { description: "What's new, Markdown (empty: docs/RELEASE-NOTES-DRAFT.md)", required: false, type: string, default: '' }

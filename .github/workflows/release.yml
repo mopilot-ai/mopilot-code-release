@@ -586,7 +586,9 @@ jobs:
         run: node scripts/github-release.mjs "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --platform win32 --arch x64 --dir out
         env: { GH_TOKEN: '${{ github.token }}', GITHUB_RELEASE_REPO: '${{ github.repository }}' }
 
-  # Linux builds its native terminal and Rust core on each architecture; packaged startup runs only on the runner.
+  # Linux builds its native terminal and Rust core on each architecture; packaged startup runs only on the runner. The core
+  # is the linux-<arch>-gnu Host build, and its sage-mcp (the harnesses' tool bridge) is built in that build's Docker
+  # container here, to the same glibc floor (scripts/build-core.mjs).
   linux:
     needs: [plan, core-host]
     runs-on: ${{ matrix.runner }}

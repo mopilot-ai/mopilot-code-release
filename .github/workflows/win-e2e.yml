@@ -164,11 +164,12 @@ jobs:
             echo "| --- | --- |"
             printf '%s' "$jobs" | jq -r '.[] | "| \(.name) | \(.conclusion // "unfinished") |"'
           } >> "$GITHUB_STEP_SUMMARY"
-          # Playwright's `✘` line for each failing test, from each failed shard's log
+          # the list reporter's line for each failing test, from each failed shard's log, once each in log order: its mark
+          # is `✘`, or `x` on Windows outside VS Code and Windows Terminal, as on a runner ("  x  4 [electron] › a.spec.ts…")
           for id in $(printf '%s' "$jobs" | jq -r '.[] | select(.conclusion == "failure") | .id'); do
             name=$(printf '%s' "$jobs" | jq -r --argjson id "$id" '.[] | select(.id == $id) | .name')
             failed=$(curl -fsSL --max-time 60 --header "Authorization: Bearer $GH_TOKEN" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" | sed -E 's/^[0-9T:.-]+Z //' | grep '✘' | sort -u || true)
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" | sed -E 's/^[0-9T:.-]+Z //' | grep -E '^[[:space:]]+(✘|x)[[:space:]]+[0-9]+ ' | awk '!seen[$0]++' || true)
             { echo; echo "### $name"; echo; echo '```'; echo "${failed:-(its log names no failing test)}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
             echo "$name"; echo "${failed:-(its log names no failing test)}"
           done

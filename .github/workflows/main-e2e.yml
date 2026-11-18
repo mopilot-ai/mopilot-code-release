@@ -25,6 +25,8 @@ on:
     inputs:
       sha: { required: true, type: string }
       scope: { required: false, type: string, default: '' }
+      # Check known failures first; a pass is only permission to run the selected suite, never main-e2e success.
+      preflight: { required: false, type: boolean, default: false }
       # the whole suite, whatever the commits since the last green run reach (the night's run, and the retry of one)
       full: { required: false, type: boolean, default: false }
       # the first try's choice (its `chosen` output): the retry tests the same specs on the same shards, which
@@ -166,13 +168,13 @@ jobs:
         run: npm ci --ignore-scripts
       - id: scope
         if: steps.reuse.outputs.mode == '' && steps.reuse.outputs.fallback != 'true'
-        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}', FULL: '${{ inputs.full }}' }
+        env: { GH_TOKEN: '${{ secrets.SOURCE_TOKEN }}', SHA: '${{ needs.pick.outputs.sha }}', FULL: '${{ inputs.full }}', PREFLIGHT: '${{ inputs.preflight }}' }
         run: node scripts/main-e2e-scope.mjs
 
   e2e:
     needs: [pick, scope]
     # no spec reached: nothing to run, and the report posts the pass
-    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.scope.outputs.mode != 'none' }}
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.scope.outputs.mode != 'none' && (!inputs.preflight || needs.scope.outputs.mode == 'scoped') }}
     # shard `linux-<n>` on Linux, every other on macOS
     runs-on: ${{ startsWith(format('{0}', matrix.shard), 'linux-') && 'ubuntu-24.04' || 'macos-15' }}
     concurrency:
@@ -237,8 +239,12 @@ jobs:
           MAC_COUNT: ${{ needs.scope.outputs.mac_count }}
           LINUX_COUNT: ${{ needs.scope.outputs.linux_count }}
           ONLY: ${{ inputs.only_specs }}
+          PREFLIGHT: ${{ inputs.preflight }}
+          GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
         run: |
           set -euo pipefail
+          # A failed shard stops immediately; its retry must include the tests it never reached.
+          # The bounded probe runs all its known failures so its report can retain their complete file list.
           if [ "$PART" = own ]; then
             # a run whose scope left no answer has this shard whether or not a spec needs it, and a commit from before
             # shard `own` has no such spec: its numbered shards ran them all
@@ -256,22 +262,26 @@ jobs:
           # a retry of a shard that failed only in some specs runs those files and not the shard's share again (the runner
           # filter above still applies); an unreadable or empty entry leaves the shard whole
           only=$(printf '%s' "${ONLY:-}" | jq -r --arg shard "$PART" '.[$shard] // [] | join(" ")' 2>/dev/null || true)
+          selected=("${part[@]}")
           if [ -n "$only" ]; then
             for spec in $only; do
               [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
             done
             echo "Retrying only the spec files that failed in shard $PART: $only"
             # word splitting of $only is the point: one argument per spec path, each checked above
-            "${npx[@]}" playwright test -c tests/e2e --pass-with-no-tests $only
+            selected=(--pass-with-no-tests $only)
           elif [ "$MODE" = scoped ]; then
             for spec in $SPECS; do
               [[ "$spec" =~ ^tests/e2e/[A-Za-z0-9._-]+\.spec\.ts$ ]] || { echo "::error::Not an E2E spec: $spec"; exit 1; }
             done
             # word splitting of SPECS is the point: one argument per spec path, each checked above
-            "${npx[@]}" playwright test -c tests/e2e "${part[@]}" $SPECS
-          else
-            "${npx[@]}" playwright test -c tests/e2e "${part[@]}"
+            selected+=( $SPECS )
           fi
+          limit=0
+          if [ "${PREFLIGHT:-false}" != true ] && [ -f scripts/e2e-fail-fast.mjs ]; then
+            limit=$(node scripts/e2e-fail-fast.mjs "${selected[@]}")
+          fi
+          "${npx[@]}" playwright test -c tests/e2e --max-failures="$limit" "${selected[@]}"
       # what the page held when a test failed, so a failure only the runner shows can be read from the log
       - if: failure()
         run: |
@@ -286,7 +296,7 @@ jobs:
   # and the plan runs on Linux, so a failure with nothing to isolate holds none of the five macOS runners.
   isolate-plan:
     needs: [pick, scope, e2e]
-    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.e2e.result != 'success' && needs.e2e.result != 'skipped' && !inputs.retry_follows }}
+    if: ${{ !cancelled() && needs.pick.outputs.sha != '' && needs.e2e.result != 'success' && needs.e2e.result != 'skipped' && !inputs.retry_follows && !inputs.preflight }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true
@@ -439,7 +449,7 @@ jobs:
       # a failure only in quarantined specs, or one isolation found a flake or an old break, posts the pass
       - name: Triage the failure against the quarantine
         id: triage
-        if: needs.e2e.result != 'success' && needs.e2e.result != 'skipped'
+        if: needs.e2e.result != 'success' && needs.e2e.result != 'skipped' && !inputs.preflight
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
@@ -464,10 +474,19 @@ jobs:
           RESULT: ${{ steps.triage.outputs.result || needs.e2e.result }}
           MODE: ${{ needs.scope.outputs.mode }}
           SUFFIX: ${{ needs.scope.outputs.suffix }}${{ steps.triage.outputs.suffix }}
+          PREFLIGHT: ${{ inputs.preflight }}
         run: |
           set -euo pipefail
           # no spec reached: the shards were skipped, which is a pass
           if [ "${MODE:-}" = none ] && [ "$RESULT" = skipped ]; then RESULT=success; fi
+          if [ "${PREFLIGHT:-false}" = true ]; then
+            # Unknown/no known failures leave the full suite to decide. A successful probe never overwrites its status.
+            if [ "$RESULT" = success ] || [ "$RESULT" = skipped ]; then
+              echo "state=success" >> "$GITHUB_OUTPUT"
+              echo "Known-failure preflight passed or was unnecessary; full E2E validation still required"
+              exit 0
+            fi
+          fi
           # a scoped result says so ("(scoped: …)"): only a full pass vouches for the specs it did not run
           if [ "$RESULT" = success ]; then state=success; description="The end-to-end suite passed${SUFFIX:-}"
           else state=failure; description="The end-to-end suite failed${SUFFIX:-}; see the failing shards"; fi
@@ -490,6 +509,7 @@ jobs:
       # nothing and opens no pull request.
       - name: Open, update or close the main-red issue
         id: issue
+        if: ${{ !inputs.preflight || steps.post.outputs.state != 'success' }}
         env:
           GH_TOKEN: ${{ secrets.SOURCE_TOKEN }}
           STATUS_GH_TOKEN: ${{ steps.ci-app.outputs.token }}
@@ -497,6 +517,7 @@ jobs:
           RED_HOLD: ${{ vars.RED_HOLD }}
           SHA: ${{ needs.pick.outputs.sha }}
           STATE: ${{ steps.post.outputs.state }}
+          PREFLIGHT: ${{ inputs.preflight }}
         run: |
           set -euo pipefail
           # the logs step wrote what it could read; an empty file is an unreadable log, which the issue says

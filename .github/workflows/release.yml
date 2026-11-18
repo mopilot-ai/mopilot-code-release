@@ -128,7 +128,8 @@ jobs:
   unit-mac:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
-    runs-on: macos-15
+    # Match main's generic Mac unit pool so its successful suite remains equivalent release evidence.
+    runs-on: macos-15-intel
     concurrency:
       group: mopilot-hosted-mac-0
       cancel-in-progress: false

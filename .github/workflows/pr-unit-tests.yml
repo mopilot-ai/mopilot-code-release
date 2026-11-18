@@ -394,7 +394,8 @@ jobs:
     if: ${{ !cancelled() && needs.plan.outputs.mac == 'true' }}
     runs-on: ${{ fromJSON(needs.route-mac.outputs.runs_on || '"macos-15"') }}
     concurrency:
-      group: ${{ contains(needs.route-mac.outputs.runs_on, 'self-hosted') && format('ci-local-{0}', github.run_id) || 'mopilot-hosted-mac-0' }}
+      # required lane = run-id parity (lanes() in scripts/ci-mac-lanes.mjs): an odd last decimal digit is an odd id, exact for any length
+      group: ${{ contains(needs.route-mac.outputs.runs_on, 'self-hosted') && format('ci-local-{0}', github.run_id) || (endsWith(format('{0}', github.run_id), '1') || endsWith(format('{0}', github.run_id), '3') || endsWith(format('{0}', github.run_id), '5') || endsWith(format('{0}', github.run_id), '7') || endsWith(format('{0}', github.run_id), '9')) && 'mopilot-hosted-mac-1' || 'mopilot-hosted-mac-0' }}
       cancel-in-progress: false
       queue: max
     timeout-minutes: 25

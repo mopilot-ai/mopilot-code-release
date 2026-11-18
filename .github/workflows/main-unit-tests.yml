@@ -20,6 +20,8 @@ on:
       reuse_success: { required: false, type: boolean, default: true }
       # the paired cycle retries this suite on this SHA if it fails: its failure is left to the retry's report
       retry_follows: { required: false, type: boolean, default: false }
+      # Internal same-cycle evidence only: manual dispatch cannot assert a prior Mac pass.
+      mac_passed_sha: { required: false, type: string, default: '' }
     secrets:
       SOURCE_TOKEN: { required: true }
       # the CI App's key, which posts the results (docs/unit-coverage.md#who-posts-a-result); without it SOURCE_TOKEN does
@@ -30,6 +32,7 @@ on:
       state: { value: '${{ jobs.report.outputs.state }}' }
       # 'false' when a fixes-main merge landed after this SHA and the report recorded the failure: the cycle skips its retry
       retry: { value: '${{ jobs.report.outputs.retry }}' }
+      mac_passed_sha: { value: "${{ jobs.mac.result == 'success' && jobs.pick.outputs.sha || '' }}" }
   workflow_dispatch:
     inputs:
       sha: { description: 'Commit of main to test (default: the newest)', required: false, type: string }
@@ -133,7 +136,7 @@ jobs:
   # the tests that need a real Mac, which the Linux job skips or checks only in part
   mac:
     needs: pick
-    if: needs.pick.outputs.sha != ''
+    if: needs.pick.outputs.sha != '' && inputs.mac_passed_sha != needs.pick.outputs.sha
     runs-on: macos-15
     concurrency:
       group: mopilot-hosted-mac-2
@@ -231,13 +234,22 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with: { app-id: '${{ vars.CI_APP_ID }}', private-key: '${{ secrets.CI_APP_PRIVATE_KEY }}', owner: '${{ github.repository_owner }}', permission-statuses: write }
+      - id: mac_result
+        env: { RESULT: '${{ needs.mac.result }}', SHA: '${{ needs.pick.outputs.sha }}', PASSED_SHA: '${{ inputs.mac_passed_sha }}' }
+        run: |
+          set -euo pipefail
+          if [ "$RESULT" = skipped ] && [ -n "$SHA" ] && [ "$PASSED_SHA" = "$SHA" ]; then
+            RESULT=success
+            echo "Retaining the first try's Mac pass on $SHA"
+          fi
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
       - name: Post the result on main's commit
         id: post
         env:
           GH_TOKEN: ${{ steps.ci-app.outputs.token || secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
-          MAC_RESULT: ${{ needs.mac.result }}
+          MAC_RESULT: ${{ steps.mac_result.outputs.result }}
           RUST_RESULT: ${{ needs.rust.result }}
         run: |
           set -euo pipefail
@@ -274,7 +286,7 @@ jobs:
       # the failed jobs' logs, which name the failing tests, and every failed step that ran none (scripts/e2e-quarantine.mjs);
       # an empty file is a log that could not be read
       - name: Read the failed jobs' logs
-        if: needs.test.result != 'success' || needs.mac.result != 'success' || needs.rust.result != 'success'
+        if: needs.test.result != 'success' || steps.mac_result.outputs.result != 'success' || needs.rust.result != 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -294,7 +306,7 @@ jobs:
           RED_HOLD: ${{ vars.RED_HOLD }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
-          MAC_RESULT: ${{ needs.mac.result }}
+          MAC_RESULT: ${{ steps.mac_result.outputs.result }}
           RUST_RESULT: ${{ needs.rust.result }}
         run: |
           set -euo pipefail

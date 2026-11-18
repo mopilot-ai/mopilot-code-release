@@ -51,6 +51,7 @@ env:
   RELEASE_SHA: ${{ inputs.sha }}
   RELEASE_PUBLISH_PCT: ${{ inputs.publish_pct }}
   MOPILOT_API: ${{ vars.MOPILOT_API }}
+  MOPILOT_PRIVATE_ANALYTICS: private
   BUILD_NUMBER: ${{ github.run_number }}
 jobs:
   plan:

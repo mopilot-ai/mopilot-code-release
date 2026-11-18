@@ -140,7 +140,8 @@ jobs:
   mac:
     needs: plan
     if: needs.plan.outputs.mac != ''
-    runs-on: macos-15
+    # Match main/release's generic Mac unit pool; native architecture checks stay in the release build jobs.
+    runs-on: macos-15-intel
     concurrency:
       group: mopilot-hosted-mac-1
       cancel-in-progress: false

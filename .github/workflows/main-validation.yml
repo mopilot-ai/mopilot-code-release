@@ -83,7 +83,7 @@ jobs:
     needs: [pick, unit]
     if: ${{ !cancelled() && needs.pick.outputs.retryUnit == 'true' && needs.unit.outputs.state != 'success' && needs.unit.outputs.retry != 'false' }}
     uses: ./.github/workflows/main-unit-tests.yml
-    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true }
+    with: { sha: '${{ needs.pick.outputs.sha }}', scope: 'unit-retry', reuse_success: true, mac_passed_sha: '${{ needs.unit.outputs.mac_passed_sha }}' }
     secrets: inherit
 
   # The shards that passed on the first try are not run again, and a shard that failed only in tests runs only the spec files

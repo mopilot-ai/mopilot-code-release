@@ -330,9 +330,12 @@ jobs:
     if: needs.plan.outputs.mac == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions: { contents: read, issues: read }
+    # actions: read, for the previous attempt's jobs (scripts/mac-pool.mjs)
+    permissions: { contents: read, issues: read, actions: read }
     outputs:
       runs_on: ${{ steps.route.outputs.runs_on }}
+      hosted_pool: ${{ steps.pool.outputs.hosted_pool }}
+      pool_note: ${{ steps.pool.outputs.pool_note }}
       runner: ${{ steps.route.outputs.runner }}
       audit: ${{ steps.route.outputs.audit }}
       owner: ${{ steps.route.outputs.owner }}
@@ -360,6 +363,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RUNNERS_TOKEN: ${{ steps.runners-app.outputs.token }}
         run: node scripts/local-lane.mjs route
+      # macos-15 (arm64), or macos-15-intel when the previous attempt's mac job never got a runner; a routed local runner keeps priority
+      - id: pool
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS_ON: ${{ steps.route.outputs.runs_on }}
+        run: node scripts/mac-pool.mjs
 
   # A selected local runner can disappear before accepting its job. This trusted job sends one hosted successor.
   local-pool-watch:
@@ -392,7 +401,7 @@ jobs:
   mac:
     needs: [plan, route-mac]
     if: ${{ !cancelled() && needs.plan.outputs.mac == 'true' }}
-    runs-on: ${{ fromJSON(needs.route-mac.outputs.runs_on || '"macos-15"') }}
+    runs-on: ${{ needs.route-mac.outputs.runner != '' && fromJSON(needs.route-mac.outputs.runs_on) || needs.route-mac.outputs.hosted_pool || 'macos-15' }}
     concurrency:
       # required lane = run-id parity (lanes() in scripts/ci-mac-lanes.mjs): an odd last decimal digit is an odd id, exact for any length
       group: ${{ contains(needs.route-mac.outputs.runs_on, 'self-hosted') && format('ci-local-{0}', github.run_id) || (endsWith(format('{0}', github.run_id), '1') || endsWith(format('{0}', github.run_id), '3') || endsWith(format('{0}', github.run_id), '5') || endsWith(format('{0}', github.run_id), '7') || endsWith(format('{0}', github.run_id), '9')) && 'mopilot-hosted-mac-1' || 'mopilot-hosted-mac-0' }}
@@ -704,6 +713,7 @@ jobs:
           # result counts only on an explicit yes, so a check that failed or never ran fails it
           LOCAL_RUNNER: ${{ needs.route-mac.outputs.runner }}
           LOCAL_OK: ${{ needs.local-check.outputs.ok }}
+          POOL_NOTE: ${{ needs.route-mac.outputs.pool_note }}
           SHA: ${{ needs.plan.outputs.sha }}
           BASE_SHA: ${{ needs.plan.outputs.base_sha }}
           RESULT: ${{ needs.static.result }}
@@ -729,6 +739,8 @@ jobs:
           need "$RUST" "$RUST_RESULT"
           need "$SPLIT" "$COVERAGE_RESULT"
           if [ -n "${LOCAL_RUNNER:-}" ] && [ "${LOCAL_OK:-}" != true ]; then RESULT=failure; fi
+          # which pool ran the mac job (scripts/mac-pool.mjs), in the run's summary
+          if [ "$MAC" = true ] && [ -n "${POOL_NOTE:-}" ]; then echo "$POOL_NOTE" | tee -a "$GITHUB_STEP_SUMMARY"; fi
           # scripts/merge-gate.mjs reads the main commit back from "merged with main <sha>"; at most 140 characters
           if [ "$RESULT" = success ]; then state=success; description="Passed merged with main $BASE_SHA: static checks, ratchet, related unit tests, coverage"
           elif [ "$PLAN_RESULT" != success ]; then state=failure; description="Failed merged with main $BASE_SHA: merge, static checks, ratchet, unit tests or coverage"

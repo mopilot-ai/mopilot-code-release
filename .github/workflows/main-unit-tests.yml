@@ -133,6 +133,31 @@ jobs:
         run: npm test
         working-directory: web
 
+  # the checks the pre-commit hook runs that a merge of two checked sides can break on its own: each pull request passed
+  # them against the main it started from, and merge-on-green makes its merge commit with no hooks (#5173). The lint ratchet's
+  # counts, file growth in the newest main commit, and the source header comments, so a break is reported within one run
+  static:
+    needs: pick
+    if: needs.pick.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ needs.pick.outputs.sha }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          # the newest main commit and its first parent, for the file-growth check
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      # no test or type check runs here, so the phone app's packages are not installed
+      - run: node scripts/ci-install.mjs --root=miss --web=skip --mobile=skip
+      - run: npm run lint:ratchet
+      - run: node scripts/file-size.mjs --base=HEAD^1
+      - run: npm run module-map -- --check
+
   # the tests that need a real Mac, which the Linux job skips or checks only in part
   mac:
     needs: pick
@@ -218,7 +243,7 @@ jobs:
         working-directory: core
 
   report:
-    needs: [pick, test, mac, rust]
+    needs: [pick, test, static, mac, rust]
     if: ${{ !cancelled() && needs.pick.outputs.sha != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -251,10 +276,12 @@ jobs:
           GH_TOKEN: ${{ steps.ci-app.outputs.token || secrets.SOURCE_TOKEN }}
           SHA: ${{ needs.pick.outputs.sha }}
           RESULT: ${{ needs.test.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
           MAC_RESULT: ${{ steps.mac_result.outputs.result }}
           RUST_RESULT: ${{ needs.rust.result }}
         run: |
           set -euo pipefail
+          if [ "$STATIC_RESULT" != success ]; then RESULT=$STATIC_RESULT; fi
           if [ "$MAC_RESULT" != success ]; then RESULT=$MAC_RESULT; fi
           if [ "$RUST_RESULT" != success ]; then RESULT=$RUST_RESULT; fi
           if [ "$RESULT" = success ]; then state=success; description='Typecheck, the full unit suite, the web tests and the core tests passed'
@@ -288,7 +315,7 @@ jobs:
       # the failed jobs' logs, which name the failing tests, and every failed step that ran none (scripts/e2e-quarantine.mjs);
       # an empty file is a log that could not be read
       - name: Read the failed jobs' logs
-        if: needs.test.result != 'success' || steps.mac_result.outputs.result != 'success' || needs.rust.result != 'success'
+        if: needs.test.result != 'success' || needs.static.result != 'success' || steps.mac_result.outputs.result != 'success' || needs.rust.result != 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -310,9 +337,10 @@ jobs:
           RESULT: ${{ needs.test.result }}
           MAC_RESULT: ${{ steps.mac_result.outputs.result }}
           RUST_RESULT: ${{ needs.rust.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
         run: |
           set -euo pipefail
-          if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ] && [ "$RUST_RESULT" = success ]; then state=success; else state=failure; fi
+          if [ "$RESULT" = success ] && [ "$MAC_RESULT" = success ] && [ "$RUST_RESULT" = success ] && [ "$STATIC_RESULT" = success ]; then state=success; else state=failure; fi
           [ -f "$RUNNER_TEMP/failed.log" ] || : > "$RUNNER_TEMP/failed.log"
           GH_TOKEN=$SOURCE_TOKEN node scripts/main-red-issue.mjs main-unit-tests "$SHA" "$state" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/failed.log"

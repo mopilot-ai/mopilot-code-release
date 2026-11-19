@@ -5,7 +5,7 @@
       "version": "0.4.40",
       "platform": "darwin",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.40/MoPilot-0.4.40-arm64.zip",
       "notes": "- A chat on a machine lists the commands and skills its agent offers there\n- Net under live events — re-read a running chat that goes quiet\n- A bare address in a reply is a link; long-press a link for Open in browser / Copy link\n- One 20 s deadline for the plan, Try again after a machine that did not answer\n- Turns running at a stop end as interrupted by the stop, with the Host's own cause and a log line\n- Keep a local chat's sent pictures past the temp prune\n- A message sent while Switch host moves a chat is held and delivered once\n- A sign-in probe that never answers is unsure after a wait, not checking for ever\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T06:08:17.554Z",
@@ -16,7 +16,7 @@
       "version": "0.4.40",
       "platform": "darwin",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.40/MoPilot-0.4.40-x64.zip",
       "notes": "- A chat on a machine lists the commands and skills its agent offers there\n- Net under live events — re-read a running chat that goes quiet\n- A bare address in a reply is a link; long-press a link for Open in browser / Copy link\n- One 20 s deadline for the plan, Try again after a machine that did not answer\n- Turns running at a stop end as interrupted by the stop, with the Host's own cause and a log line\n- Keep a local chat's sent pictures past the temp prune\n- A message sent while Switch host moves a chat is held and delivered once\n- A sign-in probe that never answers is unsure after a wait, not checking for ever\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T06:08:17.554Z",
@@ -27,7 +27,7 @@
       "version": "0.4.40",
       "platform": "win32",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.40/MoPilot-Setup-0.4.40-x64.exe",
       "notes": "- A chat on a machine lists the commands and skills its agent offers there\n- Net under live events — re-read a running chat that goes quiet\n- A bare address in a reply is a link; long-press a link for Open in browser / Copy link\n- One 20 s deadline for the plan, Try again after a machine that did not answer\n- Turns running at a stop end as interrupted by the stop, with the Host's own cause and a log line\n- Keep a local chat's sent pictures past the temp prune\n- A message sent while Switch host moves a chat is held and delivered once\n- A sign-in probe that never answers is unsure after a wait, not checking for ever\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T06:08:17.554Z",
@@ -1835,7 +1835,7 @@
       "version": "0.4.40",
       "platform": "linux",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.40/MoPilot-0.4.40-arm64.deb",
       "notes": "- A chat on a machine lists the commands and skills its agent offers there\n- Net under live events — re-read a running chat that goes quiet\n- A bare address in a reply is a link; long-press a link for Open in browser / Copy link\n- One 20 s deadline for the plan, Try again after a machine that did not answer\n- Turns running at a stop end as interrupted by the stop, with the Host's own cause and a log line\n- Keep a local chat's sent pictures past the temp prune\n- A message sent while Switch host moves a chat is held and delivered once\n- A sign-in probe that never answers is unsure after a wait, not checking for ever\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T06:08:17.554Z",
@@ -1846,7 +1846,7 @@
       "version": "0.4.40",
       "platform": "linux",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.40/MoPilot-0.4.40-x64.deb",
       "notes": "- A chat on a machine lists the commands and skills its agent offers there\n- Net under live events — re-read a running chat that goes quiet\n- A bare address in a reply is a link; long-press a link for Open in browser / Copy link\n- One 20 s deadline for the plan, Try again after a machine that did not answer\n- Turns running at a stop end as interrupted by the stop, with the Host's own cause and a log line\n- Keep a local chat's sent pictures past the temp prune\n- A message sent while Switch host moves a chat is held and delivered once\n- A sign-in probe that never answers is unsure after a wait, not checking for ever\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T06:08:17.554Z",
@@ -1964,5 +1964,5 @@
       "size": 151257320
     }
   ],
-  "revision": "4b39ab15-d818-4d8a-9067-c5ab04bef943"
+  "revision": "54a3394b-6f86-4311-85aa-2906ae1c64da"
 }

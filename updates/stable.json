@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.44",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-arm64.zip",
+      "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
+      "pub_date": "2026-11-19T16:48:36.934Z",
+      "sha256": "0f60d470b2e1468b7d90c3f60fd320f104e85c051fd91b09b871ad924f547c9b",
+      "size": 154872686
+    },
+    {
+      "version": "0.4.44",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-x64.zip",
+      "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
+      "pub_date": "2026-11-19T16:48:36.934Z",
+      "sha256": "2d60973108407392edeeb8683cb8b4309ac6f10f95ba8f6214a458a276629b15",
+      "size": 160999747
+    },
+    {
+      "version": "0.4.44",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-Setup-0.4.44-x64.exe",
+      "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
+      "pub_date": "2026-11-19T16:48:36.934Z",
+      "sha256": "7321d103a1f9f5f1d87b2b3e51b3f6cc9dede0ed765c873c45818ecd136df83e",
+      "size": 113196408
+    },
+    {
       "version": "0.4.40",
       "platform": "darwin",
       "arch": "arm64",
@@ -1832,6 +1865,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.44",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-arm64.deb",
+      "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
+      "pub_date": "2026-11-19T16:48:36.934Z",
+      "sha256": "b4cedb1b18bc17c9320ca42b479fdd0c508b2a91b494a56461b6c2df3debf513",
+      "size": 117139004
+    },
+    {
+      "version": "0.4.44",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-x64.deb",
+      "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
+      "pub_date": "2026-11-19T16:48:36.934Z",
+      "sha256": "5dc61e6482301822aafbac7cb369986522b61570dcf246c736f0943e2e8fe457",
+      "size": 122214200
+    },
+    {
       "version": "0.4.40",
       "platform": "linux",
       "arch": "arm64",
@@ -1964,5 +2019,5 @@
       "size": 151257320
     }
   ],
-  "revision": "aef9093b-c3cb-48a5-b868-48303f485056"
+  "revision": "11005220-a698-4cd4-a4e7-9c51c1d97cd2"
 }

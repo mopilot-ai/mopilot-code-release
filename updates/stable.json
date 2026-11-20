@@ -5,7 +5,7 @@
       "version": "0.4.44",
       "platform": "darwin",
       "arch": "arm64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-arm64.zip",
       "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T16:48:36.934Z",
@@ -16,7 +16,7 @@
       "version": "0.4.44",
       "platform": "darwin",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-x64.zip",
       "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T16:48:36.934Z",
@@ -27,7 +27,7 @@
       "version": "0.4.44",
       "platform": "win32",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-Setup-0.4.44-x64.exe",
       "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T16:48:36.934Z",
@@ -1868,7 +1868,7 @@
       "version": "0.4.44",
       "platform": "linux",
       "arch": "arm64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-arm64.deb",
       "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T16:48:36.934Z",
@@ -1879,7 +1879,7 @@
       "version": "0.4.44",
       "platform": "linux",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.44/MoPilot-0.4.44-x64.deb",
       "notes": "- Show linked session titles before their first turn\n- A Host chat nobody named yet is titled by its first words\n- A reader who scrolled away is not moved by the chat\n- The Classic/New UI switch is a development build's; a store build clears a saved choice\n- A big untracked file is a row in a machine's Changes pane\n- The machine Changes pane gets the conflicted files and counted flags the Host sends\n- New chat is the home page's current entry in the activity view too\n- A row names the computer its chat is on when there is more than one\n- Other fixes and improvements.",
       "pub_date": "2026-11-19T16:48:36.934Z",
@@ -2019,5 +2019,5 @@
       "size": 151257320
     }
   ],
-  "revision": "bcfc4b23-4cf4-48ac-83e8-0751363f0c80"
+  "revision": "569d3ff8-334f-4c2b-9647-c9c9363d66b8"
 }

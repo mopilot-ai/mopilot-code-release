@@ -193,6 +193,14 @@ jobs:
           set -euo pipefail
           git show "$BASE_SHA:scripts/merge-generated.mjs" > "$RUNNER_TEMP/merge-generated.mjs"
           node "$RUNNER_TEMP/merge-generated.mjs" "$BASE_SHA"
+      # Browser tests use real engines, outside the coverage runner. Keep their result in this required job.
+      - id: website
+        env:
+          BASE_SHA: '${{ needs.plan.outputs.base_sha }}'
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA" -- web shared scripts/harness-catalog.mjs electron/private/analytics/events.cjs electron/private/analytics/events.d.cts .dockerignore package.json package-lock.json .github/release-repo/pr-unit-tests.yml)
+          if [ -n "$changed" ]; then echo 'run=true' >> "$GITHUB_OUTPUT"; else echo 'run=false' >> "$GITHUB_OUTPUT"; fi
       # node_modules between runs, restored instead of `npm ci` (docs/unit-coverage.md#install-cache). The key names the Node
       # the native modules were built for and what npm ci reads (scripts/ci-install.mjs keys); saved right after the install,
       # before any test runs, so a test cannot change what the next run restores
@@ -203,9 +211,9 @@ jobs:
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ steps.keys.outputs.root }}
-      # web/ is for its type check only
+      # web/ supplies its type check and the real-engine website fixture.
       - id: webdeps
-        if: contains(fromJSON(needs.plan.outputs.static), 'types')
+        if: contains(fromJSON(needs.plan.outputs.static), 'types') || steps.website.outputs.run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: web/node_modules
@@ -234,6 +242,14 @@ jobs:
       # Same staged-content policy as pre-commit, applied to the merged tree against current main
       - if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
+      - id: website-browsers
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.website.outputs.run == 'true' }}
+        timeout-minutes: 5
+        run: node_modules/.bin/playwright install --with-deps chromium webkit
+      - name: Test website downloads in Chromium and WebKit
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.website.outputs.run == 'true' && steps.website-browsers.outcome == 'success' }}
+        timeout-minutes: 3
+        run: node scripts/test-slots.mjs --test web/tests/*.browser.test.mjs
 
   # the related tests that run anywhere, round-robin across the planned Linux shards
   unit:

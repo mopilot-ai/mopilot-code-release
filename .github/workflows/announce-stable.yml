@@ -1,0 +1,54 @@
+name: Announce stable
+# Runs in the public release repository; scripts/sync-release-repo.sh copies it there. Every way a stable build goes public
+# (a promotion, a rollout change, a hand edit) ends in a push of updates/stable.json (docs/updates.md), so this runs on that
+# push, compares the feed with every earlier one and, when it holds a higher Mac version at 100% (what /download serves), posts "MoPilot <version> is
+# out", up to six highlights from the build's notes and https://mopilot.ai/download to the Discord #announcements channel
+# (scripts/announceRelease.mjs). A rollout change, a pause and resume, a withdrawal or a rollback posts nothing.
+# It never fails a release: the job continues on error and times out in five minutes, and a failed post is not tried again,
+# so a lost post is the cost and a doubled one is not possible. Without the secret (a fork) it does nothing.
+# Secret DISCORD_RELEASE_WEBHOOK_URL (the "MoPilot Releases" webhook, seen only by the last step), secret SOURCE_TOKEN and
+# variable SOURCE_REPO (check out the script). Run logs here are public: nothing but the outcome is printed.
+run-name: Announce stable feed ${{ github.sha }}
+on:
+  push:
+    branches: [main]
+    paths: [updates/stable.json]
+permissions: { contents: read }
+# a run of its own per push: a queued run that a newer push replaced would be a post lost
+concurrency: { group: 'announce-stable-${{ github.sha }}', cancel-in-progress: false }
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 5
+    env:
+      HAS_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL != '' && vars.SOURCE_REPO != '' }}
+    steps:
+      - if: env.HAS_WEBHOOK == 'true'
+        uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts/announceRelease.mjs, sparse-checkout-cone-mode: false, path: source }
+      - if: env.HAS_WEBHOOK == 'true'
+        uses: actions/checkout@v4
+        with: { sparse-checkout: updates, sparse-checkout-cone-mode: false, fetch-depth: 0, persist-credentials: false, path: feed }
+      - if: env.HAS_WEBHOOK == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      # every earlier version of the feed (up to 300 pushes): a version that was ever fully rolled out is never announced again
+      # after a pause or a relist. A first push has none, and a before that can't be read (a forced push) fails this step, so
+      # the next one never posts a feed it can't compare
+      - if: env.HAS_WEBHOOK == 'true'
+        run: |
+          mkdir before
+          if [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            git -C feed cat-file -e "$BEFORE^{commit}"
+            for c in $(git -C feed rev-list "$BEFORE" -- updates/stable.json | head -300); do
+              git -C feed show "$c:updates/stable.json" > "before/$c.json" 2>/dev/null || rm -f "before/$c.json"
+            done
+          fi
+        env: { BEFORE: '${{ github.event.before }}' }
+      - if: env.HAS_WEBHOOK == 'true'
+        run: |
+          args=()
+          for f in before/*.json; do [ -e "$f" ] && args+=(--before "$f"); done
+          node source/scripts/announceRelease.mjs "${args[@]}" --after feed/updates/stable.json
+        env: { DISCORD_RELEASE_WEBHOOK_URL: '${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}' }

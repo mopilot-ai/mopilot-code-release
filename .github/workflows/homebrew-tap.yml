@@ -1,0 +1,122 @@
+name: Homebrew tap
+# Runs in the public release repository; scripts/sync-release-repo.sh copies it there. Every way a stable build goes public
+# ends in a push of updates/stable.json (docs/updates.md), so this runs on that push and writes the cask for the Mac build
+# /download serves (scripts/homebrewCask.mjs, from main of the feed). When the cask changes, it is installed from a local
+# tap on Apple silicon and on Intel (brew style, audit, install, signature and Gatekeeper checks, uninstall with zap), and
+# only once both pass is it pushed to mopilot-ai/homebrew-tap, where `brew install --cask mopilot-ai/tap/mopilot` reads it.
+# Started by hand it checks the cask that would be in the tap; it pushes only with publish. A failure here never touches a
+# release: the tap keeps its previous cask, and the next feed push writes the current one again.
+# Secret HOMEBREW_TAP_DEPLOY_KEY (an SSH deploy key with write access on mopilot-ai/homebrew-tap, seen only by the publish
+# job), secret SOURCE_TOKEN and variable SOURCE_REPO (check out the script). Without the deploy key (a fork) nothing is pushed.
+run-name: Homebrew tap ${{ github.event_name == 'workflow_dispatch' && 'check' || github.sha }}
+on:
+  push:
+    branches: [main]
+    paths: [updates/stable.json]
+  workflow_dispatch:
+    inputs:
+      publish: { description: 'Push the checked cask to the tap', required: false, type: boolean, default: false }
+permissions: { contents: read }
+# runs that may publish go one at a time; each reads the feed's main, so a pending one a newer one replaces loses nothing.
+# A check started by hand without publish has a group of its own, so it never replaces a pending publishing run
+concurrency: { group: "${{ (github.event_name == 'push' || inputs.publish) && 'homebrew-tap' || format('homebrew-tap-check-{0}', github.run_id) }}", cancel-in-progress: false }
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_ANALYTICS: '1'
+  HOMEBREW_NO_ENV_HINTS: '1'
+jobs:
+  render:
+    # a fork without the source repository has nothing to render
+    if: vars.SOURCE_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.cask.outputs.changed }}
+      version: ${{ steps.cask.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: '${{ vars.SOURCE_REPO }}', ref: main, token: '${{ secrets.SOURCE_TOKEN }}', persist-credentials: false, sparse-checkout: scripts/homebrewCask.mjs, sparse-checkout-cone-mode: false, path: source }
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: updates, sparse-checkout-cone-mode: false, persist-credentials: false, path: feed }
+      - uses: actions/checkout@v4
+        with: { repository: mopilot-ai/homebrew-tap, ref: main, persist-credentials: false, path: tap }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - id: cask
+        run: |
+          mkdir cask
+          node source/scripts/homebrewCask.mjs --feed feed/updates/stable.json --current tap/Casks/mopilot.rb --out cask/mopilot.rb >> "$GITHUB_OUTPUT"
+          # unchanged: a check started by hand installs the tap's current cask
+          if [ ! -f cask/mopilot.rb ] && [ -f tap/Casks/mopilot.rb ]; then cp tap/Casks/mopilot.rb cask/mopilot.rb; fi
+          cat "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: cask, path: cask, if-no-files-found: ignore, retention-days: 1 }
+
+  check:
+    needs: render
+    if: needs.render.outputs.version != '' && (needs.render.outputs.changed == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ${{ matrix.runner }}
+    # advisory work: the shared hosted-Mac budget's advisory permit (scripts/ci-mac-lanes.mjs), so it never delays a release
+    concurrency:
+      group: mopilot-hosted-mac-4
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: cask, path: cask }
+      - name: Install the cask from a local tap, check the app, and remove it
+        # the run's read-only token: the online audit reads GitHub's API, whose anonymous limit a shared runner address exhausts
+        env: { VERSION: '${{ needs.render.outputs.version }}', ARCH: '${{ matrix.arch }}', HOMEBREW_GITHUB_API_TOKEN: '${{ github.token }}' }
+        run: |
+          set -euxo pipefail
+          brew tap-new --no-git mopilot-ai/check
+          tap="$(brew --repository mopilot-ai/check)"
+          mkdir -p "$tap/Casks"
+          cp cask/mopilot.rb "$tap/Casks/mopilot.rb"
+          # Homebrew 7 loads a third-party tap's casks only once trusted; `brew install --cask mopilot-ai/tap/mopilot` trusts it
+          if brew help trust >/dev/null 2>&1; then brew trust mopilot-ai/check; fi
+          brew style --cask mopilot-ai/check/mopilot
+          # livecheck reads the feed through raw.githubusercontent.com, whose cache can lag the push this run follows (the
+          # HTTPS-availability audit runs that comparison too)
+          brew audit --cask --online --except=livecheck_version,livecheck_https_availability mopilot-ai/check/mopilot
+          brew install --cask mopilot-ai/check/mopilot
+          app=/Applications/MoPilot.app
+          test "$(defaults read "$app/Contents/Info" CFBundleShortVersionString)" = "$VERSION"
+          lipo -archs "$app/Contents/MacOS/MoPilot" | grep -qw "$ARCH"
+          codesign --verify --deep --strict "$app"
+          spctl --assess --type execute --verbose "$app" 2>&1 | tee spctl.txt
+          grep -q 'source=Notarized Developer ID' spctl.txt
+          brew uninstall --cask --zap mopilot-ai/check/mopilot
+          test ! -e "$app"
+
+  publish:
+    needs: [render, check]
+    if: needs.render.outputs.changed == 'true' && (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HAS_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
+    steps:
+      - if: env.HAS_KEY == 'true'
+        uses: actions/checkout@v4
+        with: { repository: mopilot-ai/homebrew-tap, ref: main, ssh-key: '${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}', path: tap }
+      - if: env.HAS_KEY == 'true'
+        uses: actions/download-artifact@v4
+        with: { name: cask, path: cask }
+      - if: env.HAS_KEY == 'true'
+        env: { VERSION: '${{ needs.render.outputs.version }}' }
+        run: |
+          mkdir -p tap/Casks
+          cp cask/mopilot.rb tap/Casks/mopilot.rb
+          cd tap
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Casks/mopilot.rb
+          git commit -m "mopilot $VERSION"
+          git push origin HEAD:main

@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.45",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.45/MoPilot-0.4.45-arm64.zip",
+      "notes": "- Keep conversation links in the current window\n- One Run on picker for a new chat, Add machine in place, a calmer sign-in card\n- Read Codex's colored sign-in link and code as plain text\n- The Discord is visible on the site: a Community item in the header and phone menu, a homepage block, a line on /download\n- Recover Git sign-in on remote machines\n- Put question alerts on the subsession that asked\n- Native phone sign-in route for Apple and Google ID tokens\n- Join the community in the Help menu and Settings → About\n- Other fixes and improvements.",
+      "pub_date": "2026-11-21T08:17:02.495Z",
+      "sha256": "2793ae25d320a11a4ef806dee08a094efa6aa1e50cafde18ed9c1b45093690ba",
+      "size": 154801113
+    },
+    {
+      "version": "0.4.45",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.45/MoPilot-0.4.45-x64.zip",
+      "notes": "- Keep conversation links in the current window\n- One Run on picker for a new chat, Add machine in place, a calmer sign-in card\n- Read Codex's colored sign-in link and code as plain text\n- The Discord is visible on the site: a Community item in the header and phone menu, a homepage block, a line on /download\n- Recover Git sign-in on remote machines\n- Put question alerts on the subsession that asked\n- Native phone sign-in route for Apple and Google ID tokens\n- Join the community in the Help menu and Settings → About\n- Other fixes and improvements.",
+      "pub_date": "2026-11-21T08:17:02.495Z",
+      "sha256": "4108a1ba063ac4a9b6867ccd83466f136e78c3b9cd0091a0c458e78cc09bcafd",
+      "size": 160926109
+    },
+    {
+      "version": "0.4.45",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.45/MoPilot-Setup-0.4.45-x64.exe",
+      "notes": "- Keep conversation links in the current window\n- One Run on picker for a new chat, Add machine in place, a calmer sign-in card\n- Read Codex's colored sign-in link and code as plain text\n- The Discord is visible on the site: a Community item in the header and phone menu, a homepage block, a line on /download\n- Recover Git sign-in on remote machines\n- Put question alerts on the subsession that asked\n- Native phone sign-in route for Apple and Google ID tokens\n- Join the community in the Help menu and Settings → About\n- Other fixes and improvements.",
+      "pub_date": "2026-11-21T08:17:02.495Z",
+      "sha256": "f363d05a3f255dfd44ee4e033f64a326d71da4633a9fc3f5c6b5903e83b4b387",
+      "size": 113126480
+    },
+    {
       "version": "0.4.44",
       "platform": "darwin",
       "arch": "arm64",
@@ -1865,6 +1898,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.45",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.45/MoPilot-0.4.45-arm64.deb",
+      "notes": "- Keep conversation links in the current window\n- One Run on picker for a new chat, Add machine in place, a calmer sign-in card\n- Read Codex's colored sign-in link and code as plain text\n- The Discord is visible on the site: a Community item in the header and phone menu, a homepage block, a line on /download\n- Recover Git sign-in on remote machines\n- Put question alerts on the subsession that asked\n- Native phone sign-in route for Apple and Google ID tokens\n- Join the community in the Help menu and Settings → About\n- Other fixes and improvements.",
+      "pub_date": "2026-11-21T08:17:02.495Z",
+      "sha256": "d796c0446bad6845ee4c46dd3d88d9ec0bcb220e2ae0de86b755fbd8ce2d025c",
+      "size": 117066452
+    },
+    {
+      "version": "0.4.45",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.45/MoPilot-0.4.45-x64.deb",
+      "notes": "- Keep conversation links in the current window\n- One Run on picker for a new chat, Add machine in place, a calmer sign-in card\n- Read Codex's colored sign-in link and code as plain text\n- The Discord is visible on the site: a Community item in the header and phone menu, a homepage block, a line on /download\n- Recover Git sign-in on remote machines\n- Put question alerts on the subsession that asked\n- Native phone sign-in route for Apple and Google ID tokens\n- Join the community in the Help menu and Settings → About\n- Other fixes and improvements.",
+      "pub_date": "2026-11-21T08:17:02.495Z",
+      "sha256": "2362749e3e50d4c182968a0189f3a009f1f2ca4d15d856e5c121780bcc1534e8",
+      "size": 122142116
+    },
+    {
       "version": "0.4.44",
       "platform": "linux",
       "arch": "arm64",
@@ -2019,5 +2074,5 @@
       "size": 151257320
     }
   ],
-  "revision": "9b819887-53d9-41a1-b103-47b1f4b67ad9"
+  "revision": "04e4a50b-2dc1-4a3f-b4b9-0c8cddf2a864"
 }

@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.51",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.51/MoPilot-0.4.51-arm64.zip",
+      "notes": "- Keep the phone's hosted account origin and relay private\n- A paired computer lands on its new chat, and notifications are asked after the first reply\n- The safety number is a detail of the pairing wait\n- Other fixes and improvements.",
+      "pub_date": "2026-11-22T05:14:17.567Z",
+      "sha256": "d7598cfd7e90efd635f6dd890bf6e7701e50900ec18df4c4e86d07e0b24bad49",
+      "size": 154826081
+    },
+    {
+      "version": "0.4.51",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.51/MoPilot-0.4.51-x64.zip",
+      "notes": "- Keep the phone's hosted account origin and relay private\n- A paired computer lands on its new chat, and notifications are asked after the first reply\n- The safety number is a detail of the pairing wait\n- Other fixes and improvements.",
+      "pub_date": "2026-11-22T05:14:17.567Z",
+      "sha256": "f5b11038ef9a0c93278c65b6270f6101de601535bf3ccf88411333852f74493e",
+      "size": 160952149
+    },
+    {
+      "version": "0.4.51",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.51/MoPilot-Setup-0.4.51-x64.exe",
+      "notes": "- Keep the phone's hosted account origin and relay private\n- A paired computer lands on its new chat, and notifications are asked after the first reply\n- The safety number is a detail of the pairing wait\n- Other fixes and improvements.",
+      "pub_date": "2026-11-22T05:14:17.567Z",
+      "sha256": "253dfc5777bbaff344586f86d54520087a50a5a8d1a8b3c1861ace4b439e6227",
+      "size": 113138904
+    },
+    {
       "version": "0.4.49",
       "platform": "darwin",
       "arch": "arm64",
@@ -1931,6 +1964,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.51",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.51/MoPilot-0.4.51-arm64.deb",
+      "notes": "- Keep the phone's hosted account origin and relay private\n- A paired computer lands on its new chat, and notifications are asked after the first reply\n- The safety number is a detail of the pairing wait\n- Other fixes and improvements.",
+      "pub_date": "2026-11-22T05:14:17.567Z",
+      "sha256": "34d59840df1f0cb385ae72b089b16f33679432018f9a6b2b90ade22d27e92bd7",
+      "size": 117083724
+    },
+    {
+      "version": "0.4.51",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.51/MoPilot-0.4.51-x64.deb",
+      "notes": "- Keep the phone's hosted account origin and relay private\n- A paired computer lands on its new chat, and notifications are asked after the first reply\n- The safety number is a detail of the pairing wait\n- Other fixes and improvements.",
+      "pub_date": "2026-11-22T05:14:17.567Z",
+      "sha256": "c09cb39ce6847dc48238b7b763aa190ed22f7cf64ba47d460ce48287013e18a0",
+      "size": 122916092
+    },
+    {
       "version": "0.4.49",
       "platform": "linux",
       "arch": "arm64",
@@ -2129,5 +2184,5 @@
       "size": 151257320
     }
   ],
-  "revision": "0db5c9d8-49b6-42da-b522-cecd7e529c18"
+  "revision": "718e84e0-dcd7-427a-a72b-49449306d08a"
 }

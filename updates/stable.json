@@ -5,7 +5,7 @@
       "version": "0.4.49",
       "platform": "darwin",
       "arch": "arm64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.49/MoPilot-0.4.49-arm64.zip",
       "notes": "- The connected computer is a computer, not a Mac, in the offline and empty-state lines\n- Sign out on the Account page, and the next sign-in asks which account\n- The camera opens first, one tap of Paste pairs, a failure names its cause\n- Keep the phone's MoPilot account client private\n- Mac side of onboarding\n- One sheet from the host chip, one field, folder picker when ready\n- SSH add-machine main side: addresses, causes, phase/bytes/stall progress, cancel\n- A protected process that exits between the two identity reads is gone, not an error\n- Other fixes and improvements.",
       "pub_date": "2026-11-21T18:43:34.568Z",
@@ -16,7 +16,7 @@
       "version": "0.4.49",
       "platform": "darwin",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.49/MoPilot-0.4.49-x64.zip",
       "notes": "- The connected computer is a computer, not a Mac, in the offline and empty-state lines\n- Sign out on the Account page, and the next sign-in asks which account\n- The camera opens first, one tap of Paste pairs, a failure names its cause\n- Keep the phone's MoPilot account client private\n- Mac side of onboarding\n- One sheet from the host chip, one field, folder picker when ready\n- SSH add-machine main side: addresses, causes, phase/bytes/stall progress, cancel\n- A protected process that exits between the two identity reads is gone, not an error\n- Other fixes and improvements.",
       "pub_date": "2026-11-21T18:43:34.568Z",
@@ -27,7 +27,7 @@
       "version": "0.4.49",
       "platform": "win32",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.49/MoPilot-Setup-0.4.49-x64.exe",
       "notes": "- The connected computer is a computer, not a Mac, in the offline and empty-state lines\n- Sign out on the Account page, and the next sign-in asks which account\n- The camera opens first, one tap of Paste pairs, a failure names its cause\n- Keep the phone's MoPilot account client private\n- Mac side of onboarding\n- One sheet from the host chip, one field, folder picker when ready\n- SSH add-machine main side: addresses, causes, phase/bytes/stall progress, cancel\n- A protected process that exits between the two identity reads is gone, not an error\n- Other fixes and improvements.",
       "pub_date": "2026-11-21T18:43:34.568Z",
@@ -1934,7 +1934,7 @@
       "version": "0.4.49",
       "platform": "linux",
       "arch": "arm64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.49/MoPilot-0.4.49-arm64.deb",
       "notes": "- The connected computer is a computer, not a Mac, in the offline and empty-state lines\n- Sign out on the Account page, and the next sign-in asks which account\n- The camera opens first, one tap of Paste pairs, a failure names its cause\n- Keep the phone's MoPilot account client private\n- Mac side of onboarding\n- One sheet from the host chip, one field, folder picker when ready\n- SSH add-machine main side: addresses, causes, phase/bytes/stall progress, cancel\n- A protected process that exits between the two identity reads is gone, not an error\n- Other fixes and improvements.",
       "pub_date": "2026-11-21T18:43:34.568Z",
@@ -1945,7 +1945,7 @@
       "version": "0.4.49",
       "platform": "linux",
       "arch": "x64",
-      "rolloutPct": 50,
+      "rolloutPct": 100,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.49/MoPilot-0.4.49-x64.deb",
       "notes": "- The connected computer is a computer, not a Mac, in the offline and empty-state lines\n- Sign out on the Account page, and the next sign-in asks which account\n- The camera opens first, one tap of Paste pairs, a failure names its cause\n- Keep the phone's MoPilot account client private\n- Mac side of onboarding\n- One sheet from the host chip, one field, folder picker when ready\n- SSH add-machine main side: addresses, causes, phase/bytes/stall progress, cancel\n- A protected process that exits between the two identity reads is gone, not an error\n- Other fixes and improvements.",
       "pub_date": "2026-11-21T18:43:34.568Z",
@@ -2129,5 +2129,5 @@
       "size": 151257320
     }
   ],
-  "revision": "3193eb38-98a9-4325-be53-50af2e51f322"
+  "revision": "0db5c9d8-49b6-42da-b522-cecd7e529c18"
 }

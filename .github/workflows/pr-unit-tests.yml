@@ -244,8 +244,15 @@ jobs:
         run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
       - id: website-browsers
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.website.outputs.run == 'true' }}
-        timeout-minutes: 5
-        run: node_modules/.bin/playwright install --with-deps chromium webkit
+        # the apt step of --with-deps has hung past five minutes on a slow mirror (#5612): three tries of three minutes
+        # each, inside a ten-minute ceiling, instead of one try that fails the whole job
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2 3; do
+            timeout 180 node_modules/.bin/playwright install --with-deps chromium webkit && exit 0
+            echo "playwright install: try $attempt failed" >&2
+          done
+          exit 1
       - name: Test website downloads in Chromium and WebKit
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.website.outputs.run == 'true' && steps.website-browsers.outcome == 'success' }}
         timeout-minutes: 3

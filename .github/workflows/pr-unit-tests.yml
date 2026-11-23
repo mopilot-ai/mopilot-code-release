@@ -260,6 +260,8 @@ jobs:
     # here instead of holding a Linux runner for the default six hours
     timeout-minutes: 20
     strategy:
+      # a red shard does not cancel its siblings: one run reports every shard's failures (coverage is skipped then)
+      fail-fast: false
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:

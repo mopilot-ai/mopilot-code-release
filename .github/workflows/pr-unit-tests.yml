@@ -244,13 +244,20 @@ jobs:
         run: node scripts/file-size.mjs --base=${{ needs.plan.outputs.base_sha }}
       - id: website-browsers
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.website.outputs.run == 'true' }}
-        # the apt step of --with-deps has hung past five minutes on a slow mirror (#5612): three tries of three minutes
-        # each, inside a ten-minute ceiling, instead of one try that fails the whole job
-        timeout-minutes: 10
+        # the apt step of --with-deps has hung past five minutes on a slow mirror (#5612): three tries of three minutes each,
+        # inside a twelve-minute ceiling, instead of one try that fails the whole job. A try the timeout cuts short leaves the
+        # root apt-get it started running and holding dpkg's lock (the next try then failed in two seconds), so each failed try
+        # ends it, waits a little for apt and dpkg to be gone, and repairs a half-done install before the next one starts
+        # (job `static` runs on GitHub's own `ubuntu-latest`: one job per throwaway VM, so killing apt-get by name can only reach
+        # this job's; a self-hosted or shared box would need the try to run in a process group of its own and kill that instead)
+        timeout-minutes: 12
         run: |
           for attempt in 1 2 3; do
             timeout 180 node_modules/.bin/playwright install --with-deps chromium webkit && exit 0
             echo "playwright install: try $attempt failed" >&2
+            sudo pkill -x apt-get || true
+            for _ in $(seq 10); do pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null || break; sleep 2; done
+            sudo dpkg --configure -a || true
           done
           exit 1
       - name: Test website downloads in Chromium and WebKit

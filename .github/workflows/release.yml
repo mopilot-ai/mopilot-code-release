@@ -91,6 +91,11 @@ jobs:
     needs: plan
     if: needs.plan.outputs.unit == 'true'
     runs-on: ubuntu-latest
+    # A matrix may aggregate to success even when one runner never starts. Each leg reports only its own status.
+    outputs:
+      shard-1: ${{ matrix.shard == '1' && job.status || '' }}
+      shard-2: ${{ matrix.shard == '2' && job.status || '' }}
+      shard-3: ${{ matrix.shard == '3' && job.status || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,6 +160,12 @@ jobs:
   e2e:
     needs: plan
     if: needs.plan.outputs.e2e == 'true'
+    outputs:
+      shard-1: ${{ matrix.shard == '1' && job.status || '' }}
+      shard-2: ${{ matrix.shard == '2' && job.status || '' }}
+      shard-linux-1: ${{ matrix.shard == 'linux-1' && job.status || '' }}
+      shard-linux-2: ${{ matrix.shard == 'linux-2' && job.status || '' }}
+      shard-linux-3: ${{ matrix.shard == 'linux-3' && job.status || '' }}
     # shard `linux-<n>` on Linux, every other on macOS
     runs-on: ${{ startsWith(format('{0}', matrix.shard), 'linux-') && 'ubuntu-24.04' || 'macos-15' }}
     concurrency:
@@ -211,7 +222,20 @@ jobs:
 
   mac:
     needs: [plan, core-host]
+    # A wildcard artifact download can succeed with only some of the Host cores present.
+    if: &host-cores-complete >-
+      ${{
+        needs.core-host.outputs.linux-x64-gnu == 'success' &&
+        needs.core-host.outputs.linux-x64-musl == 'success' &&
+        needs.core-host.outputs.linux-arm64-gnu == 'success' &&
+        needs.core-host.outputs.linux-arm64-musl == 'success' &&
+        needs.core-host.outputs.darwin-arm64 == 'success' &&
+        needs.core-host.outputs.darwin-x64 == 'success'
+      }}
     runs-on: macos-15
+    outputs:
+      arm64: ${{ matrix.arch == 'arm64' && job.status || '' }}
+      x64: ${{ matrix.arch == 'x64' && job.status || '' }}
     concurrency:
       group: ${{ matrix.arch == 'arm64' && 'mopilot-hosted-mac-0' || 'mopilot-hosted-mac-1' }}
       cancel-in-progress: false
@@ -342,6 +366,7 @@ jobs:
   # once, like the arm64 app in its own job.
   mac-x64-verify:
     needs: mac
+    if: needs.mac.outputs.x64 == 'success'
     runs-on: macos-15-intel
     concurrency:
       group: mopilot-hosted-mac-1
@@ -359,12 +384,25 @@ jobs:
           ditto -x -k out/MoPilot-*-x64.zip "$RUNNER_TEMP/x64"
           node scripts/smoke-launch.mjs "$RUNNER_TEMP/x64/MoPilot.app"
 
-  # Once every suite has passed: upload the macOS artifacts and register them as drafts. A suite skipped because
-  # main already passed it doesn't hold this up, but a failed or cancelled one does (a skip otherwise skips
-  # every job after it, so this and each later job says so).
+  # A job that never acquires a runner can be cancelled without failure() becoming true. Require each
+  # producer, verifier and test shard to pass, and accept skipped suites only when the plan reused them.
   mac-release:
-    needs: [mac, mac-x64-verify, unit, unit-mac, e2e]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [plan, mac, mac-x64-verify, unit, unit-mac, e2e]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.plan.result == 'success' &&
+        needs.mac.result == 'success' &&
+        needs.mac.outputs.arm64 == 'success' &&
+        needs.mac.outputs.x64 == 'success' &&
+        needs.mac-x64-verify.result == 'success' &&
+        (needs.unit.result == 'success' && needs.unit.outputs.shard-1 == 'success' && needs.unit.outputs.shard-2 == 'success' && needs.unit.outputs.shard-3 == 'success' ||
+          (needs.plan.outputs.unit == 'false' && needs.unit.result == 'skipped')) &&
+        (needs.unit-mac.result == 'success' || (needs.plan.outputs.unit == 'false' && needs.unit-mac.result == 'skipped')) &&
+        (needs.e2e.result == 'success' && needs.e2e.outputs.shard-1 == 'success' && needs.e2e.outputs.shard-2 == 'success' &&
+          needs.e2e.outputs.shard-linux-1 == 'success' && needs.e2e.outputs.shard-linux-2 == 'success' && needs.e2e.outputs.shard-linux-3 == 'success' ||
+          (needs.plan.outputs.e2e == 'false' && needs.e2e.result == 'skipped'))
+      }}
     runs-on: ubuntu-latest
     # creates the GitHub release and uploads to it
     permissions: { contents: write }
@@ -373,6 +411,9 @@ jobs:
       fail-fast: false
       matrix:
         arch: [arm64, x64]
+    outputs:
+      arm64: ${{ matrix.arch == 'arm64' && job.status || '' }}
+      x64: ${{ matrix.arch == 'x64' && job.status || '' }}
     env:
       RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
     steps:
@@ -399,6 +440,13 @@ jobs:
   core-host:
     needs: plan
     runs-on: ${{ matrix.runner }}
+    outputs:
+      linux-x64-gnu: ${{ matrix.build == 'linux-x64-gnu' && job.status || '' }}
+      linux-x64-musl: ${{ matrix.build == 'linux-x64-musl' && job.status || '' }}
+      linux-arm64-gnu: ${{ matrix.build == 'linux-arm64-gnu' && job.status || '' }}
+      linux-arm64-musl: ${{ matrix.build == 'linux-arm64-musl' && job.status || '' }}
+      darwin-arm64: ${{ matrix.build == 'darwin-arm64' && job.status || '' }}
+      darwin-x64: ${{ matrix.build == 'darwin-x64' && job.status || '' }}
     timeout-minutes: 30
     concurrency:
       group: ${{ matrix.runner == 'macos-15' && 'mopilot-hosted-mac-0' || format('core-host-{0}-{1}', github.run_id, matrix.build) }}
@@ -461,6 +509,7 @@ jobs:
   # itself there, where on Linux it would need Wine.
   windows:
     needs: [plan, core-win, core-host]
+    if: *host-cores-complete
     runs-on: macos-15
     concurrency:
       group: mopilot-hosted-mac-0
@@ -563,8 +612,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   windows-release:
-    needs: [windows-verify, unit, unit-mac, e2e]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [plan, windows-verify, unit, unit-mac, e2e]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.plan.result == 'success' &&
+        needs.windows-verify.result == 'success' &&
+        (needs.unit.result == 'success' && needs.unit.outputs.shard-1 == 'success' && needs.unit.outputs.shard-2 == 'success' && needs.unit.outputs.shard-3 == 'success' ||
+          (needs.plan.outputs.unit == 'false' && needs.unit.result == 'skipped')) &&
+        (needs.unit-mac.result == 'success' || (needs.plan.outputs.unit == 'false' && needs.unit-mac.result == 'skipped')) &&
+        (needs.e2e.result == 'success' && needs.e2e.outputs.shard-1 == 'success' && needs.e2e.outputs.shard-2 == 'success' &&
+          needs.e2e.outputs.shard-linux-1 == 'success' && needs.e2e.outputs.shard-linux-2 == 'success' && needs.e2e.outputs.shard-linux-3 == 'success' ||
+          (needs.plan.outputs.e2e == 'false' && needs.e2e.result == 'skipped'))
+      }}
     runs-on: ubuntu-latest
     # creates the GitHub release and uploads to it
     permissions: { contents: write }
@@ -593,7 +653,11 @@ jobs:
   # container here, to the same glibc floor (scripts/build-core.mjs).
   linux:
     needs: [plan, core-host]
+    if: *host-cores-complete
     runs-on: ${{ matrix.runner }}
+    outputs:
+      x64: ${{ matrix.arch == 'x64' && job.status || '' }}
+      arm64: ${{ matrix.arch == 'arm64' && job.status || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -646,12 +710,28 @@ jobs:
             out/MoPilot-*.tar.gz
 
   linux-release:
-    needs: [linux, unit, unit-mac, e2e]
-    if: ${{ !cancelled() && !failure() }}
+    needs: [plan, linux, unit, unit-mac, e2e]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.plan.result == 'success' &&
+        needs.linux.result == 'success' &&
+        needs.linux.outputs.x64 == 'success' &&
+        needs.linux.outputs.arm64 == 'success' &&
+        (needs.unit.result == 'success' && needs.unit.outputs.shard-1 == 'success' && needs.unit.outputs.shard-2 == 'success' && needs.unit.outputs.shard-3 == 'success' ||
+          (needs.plan.outputs.unit == 'false' && needs.unit.result == 'skipped')) &&
+        (needs.unit-mac.result == 'success' || (needs.plan.outputs.unit == 'false' && needs.unit-mac.result == 'skipped')) &&
+        (needs.e2e.result == 'success' && needs.e2e.outputs.shard-1 == 'success' && needs.e2e.outputs.shard-2 == 'success' &&
+          needs.e2e.outputs.shard-linux-1 == 'success' && needs.e2e.outputs.shard-linux-2 == 'success' && needs.e2e.outputs.shard-linux-3 == 'success' ||
+          (needs.plan.outputs.e2e == 'false' && needs.e2e.result == 'skipped'))
+      }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: { arch: [x64, arm64] }
+    outputs:
+      x64: ${{ matrix.arch == 'x64' && job.status || '' }}
+      arm64: ${{ matrix.arch == 'arm64' && job.status || '' }}
     permissions: { contents: write }
     env:
       RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
@@ -675,7 +755,17 @@ jobs:
   # Only when every platform is registered: tag the commit, then publish if asked.
   finish:
     needs: [mac-release, windows-release, linux-release]
-    if: ${{ !cancelled() && !failure() }}
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.mac-release.result == 'success' &&
+        needs.mac-release.outputs.arm64 == 'success' &&
+        needs.mac-release.outputs.x64 == 'success' &&
+        needs.windows-release.result == 'success' &&
+        needs.linux-release.result == 'success' &&
+        needs.linux-release.outputs.x64 == 'success' &&
+        needs.linux-release.outputs.arm64 == 'success'
+      }}
     runs-on: ubuntu-latest
     permissions: { contents: write }
     env:

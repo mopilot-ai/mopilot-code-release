@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.88",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.88/MoPilot-0.4.88-arm64.zip",
+      "notes": "- Run OpenSquilla's local router in main\n- An unanswered offer goes ahead as \"New session\" after a minute\n- A project with local sessions no longer reads as an SSH project\n- Enter follows the Follow-up setting while a turn runs\n- A video above 20 MB is made smaller by the app's own export, with progress and Cancel\n- Backspace, Delete and arrow keys no longer ask every time on a high-risk site\n- A chat on a machine keeps This Mac's permission and model labels\n- A /command token keeps its highlight while an input method composes\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T15:45:50.264Z",
+      "sha256": "dc71d7f7a2f0ff06cff7d6cfbe6358e6fd8e666f628d4d69ce6c62135af4df47",
+      "size": 242185081
+    },
+    {
+      "version": "0.4.88",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.88/MoPilot-0.4.88-x64.zip",
+      "notes": "- Run OpenSquilla's local router in main\n- An unanswered offer goes ahead as \"New session\" after a minute\n- A project with local sessions no longer reads as an SSH project\n- Enter follows the Follow-up setting while a turn runs\n- A video above 20 MB is made smaller by the app's own export, with progress and Cancel\n- Backspace, Delete and arrow keys no longer ask every time on a high-risk site\n- A chat on a machine keeps This Mac's permission and model labels\n- A /command token keeps its highlight while an input method composes\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T15:45:50.264Z",
+      "sha256": "ac96e22cf8e7e1dd370946db8dcb054b450856d4538885739a69164bbab62f99",
+      "size": 248328590
+    },
+    {
+      "version": "0.4.88",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.88/MoPilot-Setup-0.4.88-x64.exe",
+      "notes": "- Run OpenSquilla's local router in main\n- An unanswered offer goes ahead as \"New session\" after a minute\n- A project with local sessions no longer reads as an SSH project\n- Enter follows the Follow-up setting while a turn runs\n- A video above 20 MB is made smaller by the app's own export, with progress and Cancel\n- Backspace, Delete and arrow keys no longer ask every time on a high-risk site\n- A chat on a machine keeps This Mac's permission and model labels\n- A /command token keeps its highlight while an input method composes\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T15:45:50.264Z",
+      "sha256": "d181d72125b2cbd9345c232598abc4527988da7a220c43255b7f77bf8402586e",
+      "size": 197875488
+    },
+    {
       "version": "0.4.56",
       "platform": "darwin",
       "arch": "arm64",
@@ -1997,6 +2030,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.88",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.88/MoPilot-0.4.88-arm64.deb",
+      "notes": "- Run OpenSquilla's local router in main\n- An unanswered offer goes ahead as \"New session\" after a minute\n- A project with local sessions no longer reads as an SSH project\n- Enter follows the Follow-up setting while a turn runs\n- A video above 20 MB is made smaller by the app's own export, with progress and Cancel\n- Backspace, Delete and arrow keys no longer ask every time on a high-risk site\n- A chat on a machine keeps This Mac's permission and model labels\n- A /command token keeps its highlight while an input method composes\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T15:45:50.264Z",
+      "sha256": "44ee7b77f0eac52164e3ee3d7b0a1fd704bb074a14478c9c5a910b9e641d2afe",
+      "size": 203940512
+    },
+    {
+      "version": "0.4.88",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.88/MoPilot-0.4.88-x64.deb",
+      "notes": "- Run OpenSquilla's local router in main\n- An unanswered offer goes ahead as \"New session\" after a minute\n- A project with local sessions no longer reads as an SSH project\n- Enter follows the Follow-up setting while a turn runs\n- A video above 20 MB is made smaller by the app's own export, with progress and Cancel\n- Backspace, Delete and arrow keys no longer ask every time on a high-risk site\n- A chat on a machine keeps This Mac's permission and model labels\n- A /command token keeps its highlight while an input method composes\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T15:45:50.264Z",
+      "sha256": "a0412aed7f4c7cdd2cc6504aa29dff637e5ac2c0813d0180c084a04d6fe05f87",
+      "size": 210663460
+    },
+    {
       "version": "0.4.56",
       "platform": "linux",
       "arch": "arm64",
@@ -2239,5 +2294,5 @@
       "size": 151257320
     }
   ],
-  "revision": "8235d9e4-d83f-42ed-a763-d9fcdae0c840"
+  "revision": "a651f8b6-4c73-4b32-b57d-3943433008f7"
 }

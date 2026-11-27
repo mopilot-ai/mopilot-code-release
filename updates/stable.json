@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.56",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-arm64.zip",
+      "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T05:31:10.177Z",
+      "sha256": "1fb359d5aa49a768c8b941b228aae9eb14991437c7d7bd13745aa906540d5647",
+      "size": 156188209
+    },
+    {
+      "version": "0.4.56",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-x64.zip",
+      "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T05:31:10.177Z",
+      "sha256": "6a731d9c414135ab9ff031c2848c87f9f07ec9da8b016d140e9dba81362cfaaa",
+      "size": 162332804
+    },
+    {
+      "version": "0.4.56",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-Setup-0.4.56-x64.exe",
+      "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T05:31:10.177Z",
+      "sha256": "af503cd2995d738bd3f7eadd3c0698f7de4a36d7e026b6f4162bbcbf3deeba11",
+      "size": 113836696
+    },
+    {
       "version": "0.4.51",
       "platform": "darwin",
       "arch": "arm64",
@@ -1964,6 +1997,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.56",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-arm64.deb",
+      "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T05:31:10.177Z",
+      "sha256": "01d71ace9b501ad6ce12c432cdba22b0bfe5cdffa76cedc646632132015709d4",
+      "size": 117959248
+    },
+    {
+      "version": "0.4.56",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-x64.deb",
+      "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
+      "pub_date": "2026-11-27T05:31:10.177Z",
+      "sha256": "7696d782e7660dbf9a80b45d3f87cbd0045bf272bfe634f6ae2c68986cf3f3c3",
+      "size": 123925128
+    },
+    {
       "version": "0.4.51",
       "platform": "linux",
       "arch": "arm64",
@@ -2184,5 +2239,5 @@
       "size": 151257320
     }
   ],
-  "revision": "00519dbe-6597-4b4b-a9b0-5dbdf9103192"
+  "revision": "78cb5fb6-8d3b-4462-bda1-76821f924603"
 }

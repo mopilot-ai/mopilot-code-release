@@ -5,7 +5,7 @@
       "version": "0.4.56",
       "platform": "darwin",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-arm64.zip",
       "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
       "pub_date": "2026-11-27T05:31:10.177Z",
@@ -16,7 +16,7 @@
       "version": "0.4.56",
       "platform": "darwin",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-x64.zip",
       "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
       "pub_date": "2026-11-27T05:31:10.177Z",
@@ -27,7 +27,7 @@
       "version": "0.4.56",
       "platform": "win32",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-Setup-0.4.56-x64.exe",
       "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
       "pub_date": "2026-11-27T05:31:10.177Z",
@@ -2000,7 +2000,7 @@
       "version": "0.4.56",
       "platform": "linux",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-arm64.deb",
       "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
       "pub_date": "2026-11-27T05:31:10.177Z",
@@ -2011,7 +2011,7 @@
       "version": "0.4.56",
       "platform": "linux",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.56/MoPilot-0.4.56-x64.deb",
       "notes": "- Show the shared Host icon on the project row\n- Enable side chats and quoted replies on remote runs\n- Always allow on high-risk sites\n- The \"Get the app\" QR holds the App Store listing\n- C2a — managed MCP servers offered to every chat through the tool Registry\n- The homepage shows the iPhone app and a community section\n- Machine chats start in the user's default permission; cards name the agent\n- A machine card names the agent the chat runs, not 'The agent'\n- Other fixes and improvements.",
       "pub_date": "2026-11-27T05:31:10.177Z",
@@ -2239,5 +2239,5 @@
       "size": 151257320
     }
   ],
-  "revision": "78cb5fb6-8d3b-4462-bda1-76821f924603"
+  "revision": "be323bc5-991c-4bef-b84d-d6144a9d5a43"
 }

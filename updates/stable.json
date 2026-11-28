@@ -38,7 +38,7 @@
       "version": "0.4.91",
       "platform": "darwin",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.91/MoPilot-0.4.91-arm64.zip",
       "notes": "- Outputs lists files git ignores, and a machine's chat leaves its repository to Changes\n- Drag sections into place; Background tasks only while work runs\n- Changes counts its pull requests and Outputs leaves the repository to Changes\n- Show Claude Code's reason for asking on its permission card\n- Keep the renderer record out of a launch's probe samples\n- Goal, Outputs, Servers and Background tasks sections as Claude Desktop's\n- Sections fold, hide and reset as Claude Desktop's\n- Other fixes and improvements.",
       "pub_date": "2026-11-28T02:08:25.517Z",
@@ -49,7 +49,7 @@
       "version": "0.4.91",
       "platform": "darwin",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.91/MoPilot-0.4.91-x64.zip",
       "notes": "- Outputs lists files git ignores, and a machine's chat leaves its repository to Changes\n- Drag sections into place; Background tasks only while work runs\n- Changes counts its pull requests and Outputs leaves the repository to Changes\n- Show Claude Code's reason for asking on its permission card\n- Keep the renderer record out of a launch's probe samples\n- Goal, Outputs, Servers and Background tasks sections as Claude Desktop's\n- Sections fold, hide and reset as Claude Desktop's\n- Other fixes and improvements.",
       "pub_date": "2026-11-28T02:08:25.517Z",
@@ -60,7 +60,7 @@
       "version": "0.4.91",
       "platform": "win32",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.91/MoPilot-Setup-0.4.91-x64.exe",
       "notes": "- Outputs lists files git ignores, and a machine's chat leaves its repository to Changes\n- Drag sections into place; Background tasks only while work runs\n- Changes counts its pull requests and Outputs leaves the repository to Changes\n- Show Claude Code's reason for asking on its permission card\n- Keep the renderer record out of a launch's probe samples\n- Goal, Outputs, Servers and Background tasks sections as Claude Desktop's\n- Sections fold, hide and reset as Claude Desktop's\n- Other fixes and improvements.",
       "pub_date": "2026-11-28T02:08:25.517Z",
@@ -2121,7 +2121,7 @@
       "version": "0.4.91",
       "platform": "linux",
       "arch": "arm64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.91/MoPilot-0.4.91-arm64.deb",
       "notes": "- Outputs lists files git ignores, and a machine's chat leaves its repository to Changes\n- Drag sections into place; Background tasks only while work runs\n- Changes counts its pull requests and Outputs leaves the repository to Changes\n- Show Claude Code's reason for asking on its permission card\n- Keep the renderer record out of a launch's probe samples\n- Goal, Outputs, Servers and Background tasks sections as Claude Desktop's\n- Sections fold, hide and reset as Claude Desktop's\n- Other fixes and improvements.",
       "pub_date": "2026-11-28T02:08:25.517Z",
@@ -2132,7 +2132,7 @@
       "version": "0.4.91",
       "platform": "linux",
       "arch": "x64",
-      "rolloutPct": 10,
+      "rolloutPct": 50,
       "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.91/MoPilot-0.4.91-x64.deb",
       "notes": "- Outputs lists files git ignores, and a machine's chat leaves its repository to Changes\n- Drag sections into place; Background tasks only while work runs\n- Changes counts its pull requests and Outputs leaves the repository to Changes\n- Show Claude Code's reason for asking on its permission card\n- Keep the renderer record out of a launch's probe samples\n- Goal, Outputs, Servers and Background tasks sections as Claude Desktop's\n- Sections fold, hide and reset as Claude Desktop's\n- Other fixes and improvements.",
       "pub_date": "2026-11-28T02:08:25.517Z",
@@ -2404,5 +2404,5 @@
       "size": 151257320
     }
   ],
-  "revision": "e47578ff-74f9-4e61-a0c3-7cb58bf240dc"
+  "revision": "4ce47665-3ecf-4566-bb58-803e2d9f31a1"
 }

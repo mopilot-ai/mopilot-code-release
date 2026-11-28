@@ -2,6 +2,39 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.4.96",
+      "platform": "darwin",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.96/MoPilot-0.4.96-arm64.zip",
+      "notes": "- CodeMirror 6 editor for the Files pane\n- Connect Jira; agents read, comment on and transition issues with the user's approval\n- Merge when green, pinned to the head the user chose\n- Unsent drafts and queued messages survive a restart\n- Held approvals fill from the touch and say to hold; risk line outside the code box\n- The phone's grant carries the server-signed entitlement\n- The Mac's grant carries the server-signed entitlement\n- Make GitLab a full code-host provider through glab\n- Other fixes and improvements.",
+      "pub_date": "2026-11-28T12:32:21.452Z",
+      "sha256": "bb33380531a258d71d9988db84ad7bff26cd2221967f01c0cb5dd30d3b0ecbbd",
+      "size": 242853358
+    },
+    {
+      "version": "0.4.96",
+      "platform": "darwin",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.96/MoPilot-0.4.96-x64.zip",
+      "notes": "- CodeMirror 6 editor for the Files pane\n- Connect Jira; agents read, comment on and transition issues with the user's approval\n- Merge when green, pinned to the head the user chose\n- Unsent drafts and queued messages survive a restart\n- Held approvals fill from the touch and say to hold; risk line outside the code box\n- The phone's grant carries the server-signed entitlement\n- The Mac's grant carries the server-signed entitlement\n- Make GitLab a full code-host provider through glab\n- Other fixes and improvements.",
+      "pub_date": "2026-11-28T12:32:21.452Z",
+      "sha256": "b13669fddab898aaaacbe0520b4d07ad39cd4ec644c52cd42a008b470d456190",
+      "size": 248996126
+    },
+    {
+      "version": "0.4.96",
+      "platform": "win32",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.96/MoPilot-Setup-0.4.96-x64.exe",
+      "notes": "- CodeMirror 6 editor for the Files pane\n- Connect Jira; agents read, comment on and transition issues with the user's approval\n- Merge when green, pinned to the head the user chose\n- Unsent drafts and queued messages survive a restart\n- Held approvals fill from the touch and say to hold; risk line outside the code box\n- The phone's grant carries the server-signed entitlement\n- The Mac's grant carries the server-signed entitlement\n- Make GitLab a full code-host provider through glab\n- Other fixes and improvements.",
+      "pub_date": "2026-11-28T12:32:21.452Z",
+      "sha256": "9f1c775caf2481243e01b687cba7ca2f4278bfec2da571fbfa652ac9eead7e2c",
+      "size": 198368520
+    },
+    {
       "version": "0.4.94",
       "platform": "darwin",
       "arch": "arm64",
@@ -2096,6 +2129,28 @@
   ],
   "linuxReleases": [
     {
+      "version": "0.4.96",
+      "platform": "linux",
+      "arch": "arm64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.96/MoPilot-0.4.96-arm64.deb",
+      "notes": "- CodeMirror 6 editor for the Files pane\n- Connect Jira; agents read, comment on and transition issues with the user's approval\n- Merge when green, pinned to the head the user chose\n- Unsent drafts and queued messages survive a restart\n- Held approvals fill from the touch and say to hold; risk line outside the code box\n- The phone's grant carries the server-signed entitlement\n- The Mac's grant carries the server-signed entitlement\n- Make GitLab a full code-host provider through glab\n- Other fixes and improvements.",
+      "pub_date": "2026-11-28T12:32:21.452Z",
+      "sha256": "b8a788571eb8f7dd6d696d110e7b8539292833515966effdd0baaaafb51f4842",
+      "size": 204531140
+    },
+    {
+      "version": "0.4.96",
+      "platform": "linux",
+      "arch": "x64",
+      "rolloutPct": 10,
+      "url": "https://github.com/mopilot-ai/mopilot-code-release/releases/download/v0.4.96/MoPilot-0.4.96-x64.deb",
+      "notes": "- CodeMirror 6 editor for the Files pane\n- Connect Jira; agents read, comment on and transition issues with the user's approval\n- Merge when green, pinned to the head the user chose\n- Unsent drafts and queued messages survive a restart\n- Held approvals fill from the touch and say to hold; risk line outside the code box\n- The phone's grant carries the server-signed entitlement\n- The Mac's grant carries the server-signed entitlement\n- Make GitLab a full code-host provider through glab\n- Other fixes and improvements.",
+      "pub_date": "2026-11-28T12:32:21.452Z",
+      "sha256": "ce653d449be1dfd2d949215032e43be4460a565b0438e4142393d78b609177b7",
+      "size": 211335864
+    },
+    {
       "version": "0.4.94",
       "platform": "linux",
       "arch": "arm64",
@@ -2404,5 +2459,5 @@
       "size": 151257320
     }
   ],
-  "revision": "8636bc7d-6433-4ddc-b446-e3498cb3c24b"
+  "revision": "0dc552d1-eea0-4bc2-8fd5-834c07e480e4"
 }
